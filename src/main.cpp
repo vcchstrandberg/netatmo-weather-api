@@ -2,6 +2,7 @@
 #include "WiFiS3.h"
 #include "WiFiSSLClient.h"
 #include "IPAddress.h"
+#include <ArduinoJson.h>
 #include "arduino_secrets.h"
 
 // Pre-obtained access token for Netatmo API
@@ -41,6 +42,7 @@ const char *netatmo_ca =
 
 void printWifiStatus();
 void fetchWeatherData();
+void parseWeatherData(const String &jsonResponse);
 
 void setup()
 {
@@ -110,6 +112,7 @@ void fetchWeatherData()
 
   Serial.println("Weather Data Response:");
   Serial.println(response);
+  parseWeatherData(response);
 }
 
 void loop()
@@ -130,4 +133,52 @@ void printWifiStatus()
   Serial.print("Signal strength (RSSI):");
   Serial.print(rssi);
   Serial.println(" dBm");
+}
+
+// Function to parse JSON response
+void parseWeatherData(const String &jsonResponse)
+{
+  // Allocate a JSON document
+  // Adjust the size based on your JSON structure
+  StaticJsonDocument<1024> doc;
+
+  // Deserialize the JSON response
+  DeserializationError error = deserializeJson(doc, jsonResponse);
+
+  if (error)
+  {
+    Serial.print("JSON parsing failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  // Navigate through the JSON structure to extract data
+  JsonObject body = doc["body"];
+  JsonArray devices = body["devices"];
+  if (!devices.isNull() && devices.size() > 0)
+  {
+    JsonObject mainDevice = devices[0];
+    JsonArray modules = mainDevice["modules"];
+
+    // Extract Indoor Temperature and Humidity
+    float indoorTemp = mainDevice["dashboard_data"]["Temperature"];
+    int indoorHumidity = mainDevice["dashboard_data"]["Humidity"];
+    Serial.print("Indoor Temperature: ");
+    Serial.println(indoorTemp);
+    Serial.print("Indoor Humidity: ");
+    Serial.println(indoorHumidity);
+
+    // Extract Outdoor Temperature (from the first module)
+    if (!modules.isNull() && modules.size() > 0)
+    {
+      JsonObject outdoorModule = modules[0];
+      float outdoorTemp = outdoorModule["dashboard_data"]["Temperature"];
+      Serial.print("Outdoor Temperature: ");
+      Serial.println(outdoorTemp);
+    }
+  }
+  else
+  {
+    Serial.println("No devices found in the response.");
+  }
 }

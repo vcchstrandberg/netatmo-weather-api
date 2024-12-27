@@ -3,6 +3,7 @@
 #include "WiFiSSLClient.h"
 #include "IPAddress.h"
 #include <ArduinoJson.h>
+#include "Arduino_LED_Matrix.h"
 #include "arduino_secrets.h"
 
 // Pre-obtained access token for Netatmo API
@@ -15,6 +16,8 @@ int status = WL_IDLE_STATUS;
 char server[] = "api.netatmo.com"; // Netatmo API server
 
 WiFiSSLClient client;
+ArduinoLEDMatrix matrix;
+
 const char *netatmo_ca =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIDxTCCAq2gAwIBAgIBADANBgkqhkiG9w0BAQsFADCBgzELMAkGA1UEBhMCVVMx\n"
@@ -40,13 +43,26 @@ const char *netatmo_ca =
     "4uJEvlz36hz1\n"
     "-----END CERTIFICATE-----\n";
 
+uint8_t frame[8][12] = {
+    {0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0},
+    {0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0},
+    {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0},
+    {0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0},
+    {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0}};
+
 void printWifiStatus();
 void fetchWeatherData();
 void parseWeatherData(const String &jsonResponse);
+String cleanResponse(String response);
 
 void setup()
 {
   Serial.begin(115200);
+  matrix.begin();
+
   while (!Serial)
   {
     ; // wait for serial port to connect. Needed for native USB port only
@@ -104,6 +120,7 @@ void fetchWeatherData()
   // Wait for the response and print it
   delay(1000);
   String response = "";
+
   while (client.available())
   {
     char c = client.read();
@@ -112,11 +129,28 @@ void fetchWeatherData()
 
   Serial.println("Weather Data Response:");
   Serial.println(response);
-  parseWeatherData(response);
+
+  Serial.println("Raw Token Refresh Response:");
+  Serial.println(response);
+
+  // Clean the response to remove garbage data
+  String cleanJson = cleanResponse(response);
+  if (cleanJson == "")
+  {
+    Serial.println("Error: Unable to clean the response.");
+    return;
+  }
+
+  Serial.println("Cleaned JSON Response:");
+  Serial.println(cleanJson);
+
+  parseWeatherData(cleanJson);
+  // parseWeatherData(response);
 }
 
 void loop()
 {
+
   // Do nothing in the loop
 }
 
@@ -181,4 +215,18 @@ void parseWeatherData(const String &jsonResponse)
   {
     Serial.println("No devices found in the response.");
   }
+}
+
+String cleanResponse(String response)
+{
+  // Find the start of the JSON object
+  int jsonStart = response.indexOf('{');
+  if (jsonStart == -1)
+  {
+    Serial.println("Error: No JSON object found in the response.");
+    return "";
+  }
+
+  // Extract the JSON part of the response
+  return response.substring(jsonStart);
 }

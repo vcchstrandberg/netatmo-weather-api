@@ -26,3 +26,9 @@ You will also need to create a file called `secrets.h` in the `include` folder. 
 ```
 
 Replace `YourSSID` with your WiFi SSID, `Your WiFi Password` with your WiFi password and `Your Netatmo API Token` with your Netatmo API token.
+
+## Missing features
+
+- [ ] Implement a way to refresh the access token when it expires.
+- [ ] Implement a LED Display to show the weather data.
+- [ ] Design a case for the display.

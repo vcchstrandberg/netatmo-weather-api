@@ -43,16 +43,6 @@ const char *netatmo_ca =
     "4uJEvlz36hz1\n"
     "-----END CERTIFICATE-----\n";
 
-uint8_t frame[8][12] = {
-    {0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0},
-    {0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-    {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-    {0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0},
-    {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0}};
-
 void printWifiStatus();
 void fetchWeatherData();
 void parseWeatherData(const String &jsonResponse);
@@ -92,8 +82,6 @@ void setup()
   printWifiStatus();
 
   Serial.println("\nStarting connection to server...");
-  Serial.print("Access Token: ");
-  Serial.println(accessToken);
 
   client.setCACert(netatmo_ca);
   if (client.connect(server, 443))
@@ -127,9 +115,6 @@ void fetchWeatherData()
     response += c;
   }
 
-  Serial.println("Weather Data Response:");
-  Serial.println(response);
-
   Serial.println("Raw Token Refresh Response:");
   Serial.println(response);
 
@@ -145,7 +130,6 @@ void fetchWeatherData()
   Serial.println(cleanJson);
 
   parseWeatherData(cleanJson);
-  // parseWeatherData(response);
 }
 
 void loop()

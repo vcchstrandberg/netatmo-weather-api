@@ -23,7 +23,6 @@ You will also need to create a file called `secrets.h` in the `include` folder. 
 #define SECRET_SSID "YourSSID"
 #define SECRET_PASS "Your WiFi Password"
 #define SECRET_TOKEN "Your Netatmo API Token"
+```
 
-```cpp
 Replace `YourSSID` with your WiFi SSID, `Your WiFi Password` with your WiFi password and `Your Netatmo API Token` with your Netatmo API token.
-

@@ -45,7 +45,7 @@ const char *netatmo_ca =
 
 void printWifiStatus();
 void fetchWeatherData();
-void parseWeatherData(const String &jsonResponse);
+void parseWeatherData2(const String &jsonResponse);
 String cleanResponse(String response);
 
 void setup()
@@ -115,9 +115,6 @@ void fetchWeatherData()
     response += c;
   }
 
-  Serial.println("Raw Token Refresh Response:");
-  Serial.println(response);
-
   // Clean the response to remove garbage data
   String cleanJson = cleanResponse(response);
   if (cleanJson == "")
@@ -129,7 +126,7 @@ void fetchWeatherData()
   Serial.println("Cleaned JSON Response:");
   Serial.println(cleanJson);
 
-  parseWeatherData(cleanJson);
+  parseWeatherData2(cleanJson);
 }
 
 void loop()
@@ -153,54 +150,6 @@ void printWifiStatus()
   Serial.println(" dBm");
 }
 
-// Function to parse JSON response
-void parseWeatherData(const String &jsonResponse)
-{
-  // Allocate a JSON document
-  // Adjust the size based on your JSON structure
-  StaticJsonDocument<1024> doc;
-
-  // Deserialize the JSON response
-  DeserializationError error = deserializeJson(doc, jsonResponse);
-
-  if (error)
-  {
-    Serial.print("JSON parsing failed: ");
-    Serial.println(error.c_str());
-    return;
-  }
-
-  // Navigate through the JSON structure to extract data
-  JsonObject body = doc["body"];
-  JsonArray devices = body["devices"];
-  if (!devices.isNull() && devices.size() > 0)
-  {
-    JsonObject mainDevice = devices[0];
-    JsonArray modules = mainDevice["modules"];
-
-    // Extract Indoor Temperature and Humidity
-    float indoorTemp = mainDevice["dashboard_data"]["Temperature"];
-    int indoorHumidity = mainDevice["dashboard_data"]["Humidity"];
-    Serial.print("Indoor Temperature: ");
-    Serial.println(indoorTemp);
-    Serial.print("Indoor Humidity: ");
-    Serial.println(indoorHumidity);
-
-    // Extract Outdoor Temperature (from the first module)
-    if (!modules.isNull() && modules.size() > 0)
-    {
-      JsonObject outdoorModule = modules[0];
-      float outdoorTemp = outdoorModule["dashboard_data"]["Temperature"];
-      Serial.print("Outdoor Temperature: ");
-      Serial.println(outdoorTemp);
-    }
-  }
-  else
-  {
-    Serial.println("No devices found in the response.");
-  }
-}
-
 String cleanResponse(String response)
 {
   // Find the start of the JSON object
@@ -213,4 +162,120 @@ String cleanResponse(String response)
 
   // Extract the JSON part of the response
   return response.substring(jsonStart);
+}
+
+void parseWeatherData2(const String &jsonResponse)
+{
+  // String input;
+
+  JsonDocument doc;
+
+  DeserializationError error = deserializeJson(doc, jsonResponse);
+
+  if (error)
+  {
+    Serial.print("deserializeJson() failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  JsonObject body_devices_0 = doc["body"]["devices"][0];
+  const char *body_devices_0_id = body_devices_0["_id"];
+  long body_devices_0_date_setup = body_devices_0["date_setup"];
+  long body_devices_0_last_setup = body_devices_0["last_setup"];
+  const char *body_devices_0_type = body_devices_0["type"];
+  long body_devices_0_last_status_store = body_devices_0["last_status_store"];
+  const char *body_devices_0_module_name = body_devices_0["module_name"];
+  int body_devices_0_firmware = body_devices_0["firmware"];
+  int body_devices_0_wifi_status = body_devices_0["wifi_status"];
+  bool body_devices_0_reachable = body_devices_0["reachable"];
+  bool body_devices_0_co2_calibrating = body_devices_0["co2_calibrating"];
+
+  JsonArray body_devices_0_data_type = body_devices_0["data_type"];
+  const char *body_devices_0_data_type_0 = body_devices_0_data_type[0]; // "Temperature"
+  const char *body_devices_0_data_type_1 = body_devices_0_data_type[1]; // "CO2"
+  const char *body_devices_0_data_type_2 = body_devices_0_data_type[2]; // "Humidity"
+  const char *body_devices_0_data_type_3 = body_devices_0_data_type[3]; // "Noise"
+  const char *body_devices_0_data_type_4 = body_devices_0_data_type[4]; // "Pressure"
+  JsonObject body_devices_0_place = body_devices_0["place"];
+  int body_devices_0_place_altitude = body_devices_0_place["altitude"];
+  const char *body_devices_0_place_city = body_devices_0_place["city"];
+  const char *body_devices_0_place_country = body_devices_0_place["country"];
+  const char *body_devices_0_place_timezone = body_devices_0_place["timezone"];
+  double body_devices_0_place_location_0 = body_devices_0_place["location"][0];
+  double body_devices_0_place_location_1 = body_devices_0_place["location"][1];
+  const char *body_devices_0_station_name = body_devices_0["station_name"];
+  const char *body_devices_0_home_id = body_devices_0["home_id"];
+  const char *body_devices_0_home_name = body_devices_0["home_name"];
+
+  JsonObject body_devices_0_dashboard_data = body_devices_0["dashboard_data"];
+  long body_devices_0_dashboard_data_time_utc = body_devices_0_dashboard_data["time_utc"];
+  float body_devices_0_dashboard_data_Temperature = body_devices_0_dashboard_data["Temperature"];
+  int body_devices_0_dashboard_data_CO2 = body_devices_0_dashboard_data["CO2"];
+  int body_devices_0_dashboard_data_Humidity = body_devices_0_dashboard_data["Humidity"];
+  int body_devices_0_dashboard_data_Noise = body_devices_0_dashboard_data["Noise"];
+  float body_devices_0_dashboard_data_Pressure = body_devices_0_dashboard_data["Pressure"];
+  float body_devices_0_dashboard_data_AbsolutePressure = body_devices_0_dashboard_data["AbsolutePressure"];
+  float body_devices_0_dashboard_data_min_temp = body_devices_0_dashboard_data["min_temp"];
+  float body_devices_0_dashboard_data_max_temp = body_devices_0_dashboard_data["max_temp"];
+  long body_devices_0_dashboard_data_date_max_temp = body_devices_0_dashboard_data["date_max_temp"];
+  long body_devices_0_dashboard_data_date_min_temp = body_devices_0_dashboard_data["date_min_temp"];
+  const char *body_devices_0_dashboard_data_temp_trend = body_devices_0_dashboard_data["temp_trend"];
+  const char *body_devices_0_dashboard_data_pressure_trend = body_devices_0_dashboard_data["pressure_trend"];
+
+  JsonObject body_devices_0_modules_0 = body_devices_0["modules"][0];
+  const char *body_devices_0_modules_0_id = body_devices_0_modules_0["_id"];
+  const char *body_devices_0_modules_0_type = body_devices_0_modules_0["type"];
+  const char *body_devices_0_modules_0_module_name = body_devices_0_modules_0["module_name"];
+  long body_devices_0_modules_0_last_setup = body_devices_0_modules_0["last_setup"];
+
+  const char *body_devices_0_modules_0_data_type_0 = body_devices_0_modules_0["data_type"][0];
+  const char *body_devices_0_modules_0_data_type_1 = body_devices_0_modules_0["data_type"][1];
+
+  int body_devices_0_modules_0_battery_percent = body_devices_0_modules_0["battery_percent"];
+  bool body_devices_0_modules_0_reachable = body_devices_0_modules_0["reachable"];
+  int body_devices_0_modules_0_firmware = body_devices_0_modules_0["firmware"];
+  long body_devices_0_modules_0_last_message = body_devices_0_modules_0["last_message"];
+  long body_devices_0_modules_0_last_seen = body_devices_0_modules_0["last_seen"];
+  int body_devices_0_modules_0_rf_status = body_devices_0_modules_0["rf_status"];
+  int body_devices_0_modules_0_battery_vp = body_devices_0_modules_0["battery_vp"];
+
+  JsonObject body_devices_0_modules_0_dashboard_data = body_devices_0_modules_0["dashboard_data"];
+  long body_devices_0_modules_0_dashboard_data_time_utc = body_devices_0_modules_0_dashboard_data["time_utc"];
+  int body_devices_0_modules_0_dashboard_data_Temperature = body_devices_0_modules_0_dashboard_data["Temperature"];
+  int body_devices_0_modules_0_dashboard_data_Humidity = body_devices_0_modules_0_dashboard_data["Humidity"];
+  float body_devices_0_modules_0_dashboard_data_min_temp = body_devices_0_modules_0_dashboard_data["min_temp"];
+  float body_devices_0_modules_0_dashboard_data_max_temp = body_devices_0_modules_0_dashboard_data["max_temp"];
+  long body_devices_0_modules_0_dashboard_data_date_max_temp = body_devices_0_modules_0_dashboard_data["date_max_temp"];
+  long body_devices_0_modules_0_dashboard_data_date_min_temp = body_devices_0_modules_0_dashboard_data["date_min_temp"];
+  const char *body_devices_0_modules_0_dashboard_data_temp_trend = body_devices_0_modules_0_dashboard_data["temp_trend"];
+
+  const char *body_user_mail = doc["body"]["user"]["mail"];
+
+  JsonObject body_user_administrative = doc["body"]["user"]["administrative"];
+  const char *body_user_administrative_lang = body_user_administrative["lang"];
+  const char *body_user_administrative_reg_locale = body_user_administrative["reg_locale"];
+  const char *body_user_administrative_country = body_user_administrative["country"];
+  int body_user_administrative_unit = body_user_administrative["unit"];
+  int body_user_administrative_windunit = body_user_administrative["windunit"];
+  int body_user_administrative_pressureunit = body_user_administrative["pressureunit"];
+  int body_user_administrative_feel_like_algo = body_user_administrative["feel_like_algo"];
+
+  const char *status = doc["status"];
+  double time_exec = doc["time_exec"];
+  long time_server = doc["time_server"];
+
+  float indoorTemp = body_devices_0_dashboard_data["Temperature"];
+  int indoorHumidity = body_devices_0_dashboard_data["Humidity"];
+  float airPressure = body_devices_0_dashboard_data["Pressure"];
+  float outTemperature = body_devices_0_modules_0_dashboard_data["Temperature"];
+
+  Serial.print("Indoor Temperature: ");
+  Serial.println(indoorTemp);
+  Serial.print("Indoor Humidity: ");
+  Serial.println(indoorHumidity);
+  Serial.print("Air Pressure: ");
+  Serial.println(airPressure);
+  Serial.print("Outdoor Temperature: ");
+  Serial.println(outTemperature);
 }

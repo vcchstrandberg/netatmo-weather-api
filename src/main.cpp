@@ -279,3 +279,75 @@ void parseWeatherData2(const String &jsonResponse)
   Serial.print("Outdoor Temperature: ");
   Serial.println(outTemperature);
 }
+
+void refreshAccessToken()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("WiFi not connected");
+    return;
+  }
+
+  WiFiSSLClient tokenClient;
+  const char *tokenServer = "api.netatmo.com";
+
+  if (tokenClient.connect(tokenServer, 443))
+  {
+    Serial.println("Connected to Netatmo token server");
+
+    String postData = "grant_type=refresh_token&refresh_token=" + String(SECRET_REFRESH_TOKEN) + "&client_id=" + String(SECRET_CLIENT_ID) + "&client_secret=" + String(SECRET_CLIENT_SECRET);
+
+    tokenClient.println("POST /oauth2/token HTTP/1.1");
+    tokenClient.println("Host: api.netatmo.com");
+    tokenClient.println("Content-Type: application/x-www-form-urlencoded");
+    tokenClient.print("Content-Length: ");
+    tokenClient.println(postData.length());
+    tokenClient.println("Connection: close");
+    tokenClient.println();
+    tokenClient.println(postData);
+
+    delay(1000);
+
+    String response = "";
+    while (tokenClient.available())
+    {
+      char c = tokenClient.read();
+      response += c;
+    }
+
+    tokenClient.stop();
+
+    int jsonStart = response.indexOf('{');
+    if (jsonStart == -1)
+    {
+      Serial.println("Error: No JSON object found in the response.");
+      return;
+    }
+
+    String jsonResponse = response.substring(jsonStart);
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, jsonResponse);
+
+    if (error)
+    {
+      Serial.print("deserializeJson() failed: ");
+      Serial.println(error.c_str());
+      return;
+    }
+
+    const char *newAccessToken = doc["access_token"];
+    if (newAccessToken)
+    {
+      accessToken = newAccessToken;
+      Serial.println("Access token refreshed successfully");
+    }
+    else
+    {
+      Serial.println("Error: Unable to refresh access token");
+    }
+  }
+  else
+  {
+    Serial.println("Connection to token server failed");
+  }
+}

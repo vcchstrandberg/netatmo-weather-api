@@ -29,6 +29,6 @@ Replace `YourSSID` with your WiFi SSID, `Your WiFi Password` with your WiFi pass
 
 ## Missing features
 
-- [ ] Implement a way to refresh the access token when it expires.
+- [ ] Implement a way to refresh the access token and persist on device, when it expires.
 - [ ] Implement a LED Display to show the weather data.
 - [ ] Design a case for the display.

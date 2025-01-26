@@ -5,16 +5,16 @@
 #include <ArduinoJson.h>
 #include "Arduino_LED_Matrix.h"
 #include "arduino_secrets.h"
+#include <U8g2lib.h>
+
 
 // Pre-obtained access token for Netatmo API
-const char *accessToken = SECRET_TOKEN;
-
+String accessToken = ACCESS_TOKEN; // Change to String for mutability
 char ssid[] = SECRET_SSID; // your network SSID (name)
 char pass[] = SECRET_PASS; // your network password (use for WPA, or use as key for WEP)
-
-int status = WL_IDLE_STATUS;
+int status = WL_IDLE_STATUS; // the Wifi radio's status
 char server[] = "api.netatmo.com"; // Netatmo API server
-
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 WiFiSSLClient client;
 ArduinoLEDMatrix matrix;
 
@@ -46,13 +46,16 @@ const char *netatmo_ca =
 void printWifiStatus();
 void fetchWeatherData();
 void parseWeatherData2(const String &jsonResponse);
+void refreshAccessToken();
 String cleanResponse(String response);
+
 
 void setup()
 {
+  oled.begin();
+  oled.setFont(u8g2_font_ncenB08_tr); // Choose a font
   Serial.begin(115200);
-  matrix.begin();
-
+  Serial.println("\nStarting connection to server...");
   while (!Serial)
   {
     ; // wait for serial port to connect. Needed for native USB port only
@@ -78,21 +81,22 @@ void setup()
     status = WiFi.begin(ssid, pass);
     delay(10000);
   }
-
-  printWifiStatus();
+  Serial.println("\nAccess_token: " + accessToken);
+  //printWifiStatus();
 
   Serial.println("\nStarting connection to server...");
 
   client.setCACert(netatmo_ca);
-  if (client.connect(server, 443))
-  {
-    Serial.println("Connected to Netatmo API server");
-    fetchWeatherData();
-  }
-  else
-  {
-    Serial.println("Connection to server failed");
-  }
+  //if (client.connect(server, 443))
+  //{
+  //  Serial.println("Connected to Netatmo API server");
+    //refreshAccessToken();
+  //  fetchWeatherData();
+  //}
+  //else
+  //{
+  //  Serial.println("Connection to server failed");
+  //}
 }
 
 void fetchWeatherData()
@@ -131,7 +135,17 @@ void fetchWeatherData()
 
 void loop()
 {
-
+    if (client.connect(server, 443))
+  {
+    Serial.println("Connected to Netatmo API server");
+    //refreshAccessToken();
+    fetchWeatherData();
+  }
+  else
+  {
+    Serial.println("Connection to server failed");
+  }
+  delay(10000);
   // Do nothing in the loop
 }
 
@@ -272,6 +286,19 @@ void parseWeatherData2(const String &jsonResponse)
 
   Serial.print("Indoor Temperature: ");
   Serial.println(indoorTemp);
+  String temp = String("IndoorTemp: ");
+  temp.concat(indoorTemp);
+  oled.drawStr(0, 10, temp.c_str());
+  String hum = String("IndoorHumidity: ");
+  hum.concat(indoorHumidity);
+  oled.drawStr(0, 20, hum.c_str()); 
+  String airP = String("AirPressure: ");
+  airP.concat(airPressure);
+  oled.drawStr(0, 30, airP.c_str());
+  String outTemp = String("OutdoorTemp: ");
+  outTemp.concat(outTemperature);
+  oled.drawStr(0, 40, outTemp.c_str());
+  oled.sendBuffer();
   Serial.print("Indoor Humidity: ");
   Serial.println(indoorHumidity);
   Serial.print("Air Pressure: ");
@@ -295,8 +322,12 @@ void refreshAccessToken()
   {
     Serial.println("Connected to Netatmo token server");
 
-    String postData = "grant_type=refresh_token&refresh_token=" + String(SECRET_REFRESH_TOKEN) + "&client_id=" + String(SECRET_CLIENT_ID) + "&client_secret=" + String(SECRET_CLIENT_SECRET);
+    // Prepare POST data
+    String postData = "grant_type=refresh_token&refresh_token=" + String(REFRESH_TOKEN) +
+                      "&client_id=" + String(CLIENT_ID) +
+                      "&client_secret=" + String(CLIENT_SECRET);
 
+    // Send POST request
     tokenClient.println("POST /oauth2/token HTTP/1.1");
     tokenClient.println("Host: api.netatmo.com");
     tokenClient.println("Content-Type: application/x-www-form-urlencoded");
@@ -306,8 +337,10 @@ void refreshAccessToken()
     tokenClient.println();
     tokenClient.println(postData);
 
+    // Wait for response
     delay(1000);
 
+    // Read response
     String response = "";
     while (tokenClient.available())
     {
@@ -317,6 +350,7 @@ void refreshAccessToken()
 
     tokenClient.stop();
 
+    // Check if response contains a JSON object
     int jsonStart = response.indexOf('{');
     if (jsonStart == -1)
     {
@@ -324,6 +358,7 @@ void refreshAccessToken()
       return;
     }
 
+    // Parse JSON response
     String jsonResponse = response.substring(jsonStart);
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, jsonResponse);
@@ -335,11 +370,14 @@ void refreshAccessToken()
       return;
     }
 
+    // Extract new access token
     const char *newAccessToken = doc["access_token"];
     if (newAccessToken)
     {
-      accessToken = newAccessToken;
+      accessToken = String(newAccessToken);
       Serial.println("Access token refreshed successfully");
+      Serial.print("New Access Token: ");
+      Serial.println(accessToken);
     }
     else
     {

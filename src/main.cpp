@@ -279,7 +279,7 @@ void parseWeatherData2(const String &jsonResponse)
   oled.drawStr(0, 40, outTemp.c_str());
   String countString = String("Counter: ");
   countString.concat(counter);
-  oled.drawStr(0, 50, countString.c_str());
+  //oled.drawStr(0, 50, countString.c_str());
   oled.sendBuffer();
   Serial.print("Indoor Humidity: ");
   Serial.println(indoorHumidity);

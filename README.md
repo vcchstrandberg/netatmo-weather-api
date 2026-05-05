@@ -62,7 +62,16 @@ The RA4M1 runs the sketch. The ESP32-S3 handles all WiFi, TLS, and persistent st
 
 ```mermaid
 flowchart TB
-    main["main.cpp — Application Logic\nsetup() / loop() / fetchWeatherData()\nrefreshAccessToken() / parseWeatherData2()"]
+    subgraph main[main.cpp — Application Logic]
+        direction LR
+        setup["setup()"]
+        loop["loop()"]
+        refresh["refreshAccessToken()"]
+        fetch["fetchWeatherData()"]
+        display["updateDisplay()"]
+        read["readHttpResponse()"]
+        tokens["loadTokens() / saveTokens()"]
+    end
 
     subgraph libs[Libraries]
         direction LR
@@ -109,17 +118,26 @@ flowchart TD
 
     conn1 --> ok1{Connected?}
     ok1 -->|No| err1[Log error]
-    ok1 -->|Yes| refresh[POST /oauth2/token\nrefresh tokens]
-    refresh --> save[Save new tokens to NVS]
+    ok1 -->|Yes| post[POST /oauth2/token]
+
+    post --> read1[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
+    read1 --> ok3{Valid response?}
+    ok3 -->|No| err1
+    ok3 -->|Yes| parse1[Parse JSON\ncheck access + refresh token non-null]
+    parse1 --> save[saveTokens to NVS]
 
     err1 --> conn2[Open new HTTPS connection\nto api.netatmo.com]
     save --> conn2
 
     conn2 --> ok2{Connected?}
     ok2 -->|No| err2[Log error]
-    ok2 -->|Yes| fetch[GET /api/getstationsdata]
-    fetch --> parse[Parse JSON response\nArduinoJson]
-    parse --> display[Update OLED display]
+    ok2 -->|Yes| get[GET /api/getstationsdata]
+
+    get --> read2[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
+    read2 --> ok4{Valid response?}
+    ok4 -->|No| err2
+    ok4 -->|Yes| parse2[Parse JSON\nextract 4 sensor fields]
+    parse2 --> display[updateDisplay\nindoorTemp · humidity · pressure · outdoorTemp]
 
     err2 --> wait[Wait 60 seconds]
     display --> wait

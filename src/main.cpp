@@ -4,21 +4,24 @@
 #include "IPAddress.h"
 #include <ArduinoJson.h>
 #include "Arduino_LED_Matrix.h"
-#include "arduino_secrets.h"
 #include <U8g2lib.h>
+#include <Arduino_UnifiedStorage.h>
 
-// Pre-obtained access token for Netatmo API
-String accessToken = ACCESS_TOKEN; // Change to String for mutability
-String refreshToken = REFRESH_TOKEN;
-char ssid[] = SECRET_SSID; // your network SSID (name)
-char pass[] = SECRET_PASS; // your network password (use for WPA, or use as key for WEP)
+String accessToken = "";
+String refreshToken = "";
+String wifiSSID = "";
+String wifiPass = "";
+String clientId = "";
+String clientSecret = "";
+
 int counter = 0;
-int status = WL_IDLE_STATUS;       // the Wifi radio's status
-char server[] = "api.netatmo.com"; // Netatmo API server
+int status = WL_IDLE_STATUS;
+char server[] = "api.netatmo.com";
 
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, /* reset=*/U8X8_PIN_NONE);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
 ArduinoLEDMatrix matrix;
+QSPIFlash flashStorage;
 
 const char *netatmo_ca =
     "-----BEGIN CERTIFICATE-----\n"
@@ -50,17 +53,33 @@ void fetchWeatherData();
 void parseWeatherData2(const String &jsonResponse);
 void refreshAccessToken();
 String cleanResponse(String response);
+void loadConfig();
+void saveTokens();
+void enterConfigMode();
 
 void setup()
 {
   oled.begin();
-  oled.setFont(u8g2_font_ncenB08_tr); // Choose a font
+  oled.setFont(u8g2_font_ncenB08_tr);
   Serial.begin(115200);
-  Serial.println("\nStarting connection to server...");
   while (!Serial)
   {
-    ; // wait for serial port to connect. Needed for native USB port only
+    ;
   }
+
+  if (!flashStorage.begin())
+  {
+    Serial.println("Flash: failed to mount");
+  }
+
+  loadConfig();
+
+  if (wifiSSID.length() == 0)
+  {
+    enterConfigMode();
+  }
+
+  Serial.println("Starting connection to server...");
 
   if (WiFi.status() == WL_NO_MODULE)
   {
@@ -78,8 +97,8 @@ void setup()
   while (status != WL_CONNECTED)
   {
     Serial.print("Attempting to connect to SSID: ");
-    Serial.println(ssid);
-    status = WiFi.begin(ssid, pass);
+    Serial.println(wifiSSID);
+    status = WiFi.begin(wifiSSID.c_str(), wifiPass.c_str());
     delay(10000);
   }
   client.setCACert(netatmo_ca);
@@ -109,9 +128,92 @@ void loop()
   delay(60000);
 }
 
+void loadConfig()
+{
+  Folder root = flashStorage.getRootFolder();
+  UFile f = root.openFile("config.json", FileMode::READ);
+  if (!f.available())
+  {
+    Serial.println("Config: no config.json found");
+    f.close();
+    return;
+  }
+  String content = f.readAsString();
+  f.close();
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, content);
+  if (error)
+  {
+    Serial.print("Config: parse failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  wifiSSID     = doc["ssid"]          | "";
+  wifiPass     = doc["pass"]          | "";
+  clientId     = doc["client_id"]     | "";
+  clientSecret = doc["client_secret"] | "";
+  accessToken  = doc["access_token"]  | "";
+  refreshToken = doc["refresh_token"] | "";
+
+  Serial.println("Config loaded from flash");
+}
+
+void saveTokens()
+{
+  // Read existing config so we preserve ssid/pass/client credentials
+  Folder root = flashStorage.getRootFolder();
+  UFile rf = root.openFile("config.json", FileMode::READ);
+  String content = rf.available() ? rf.readAsString() : "{}";
+  rf.close();
+
+  JsonDocument doc;
+  deserializeJson(doc, content);
+  doc["access_token"]  = accessToken;
+  doc["refresh_token"] = refreshToken;
+
+  String output;
+  serializeJson(doc, output);
+
+  UFile wf = root.createFile("config.json", FileMode::WRITE);
+  wf.write(output);
+  wf.close();
+  Serial.println("Tokens saved to config.json");
+}
+
+// Exposes the QSPI flash as a USB drive so the user can create config.json.
+// Does not return — board must be reset after the file is created.
+void enterConfigMode()
+{
+  Serial.println("No config found. Connect via USB, create config.json, then reset the board.");
+
+  oled.clearDisplay();
+  oled.drawStr(0, 10, "No config found!");
+  oled.drawStr(0, 25, "Connect USB,");
+  oled.drawStr(0, 35, "create config.json,");
+  oled.drawStr(0, 45, "then reset board.");
+  oled.sendBuffer();
+
+  flashStorage.unmount();
+
+  // Expose QSPI flash as a USB mass storage drive.
+  // The Arduino_UnifiedStorage library handles wear-levelled LittleFS underneath.
+  // If this method name differs in your library version, check:
+  //   https://github.com/arduino-libraries/Arduino_UnifiedStorage
+  if (!flashStorage.beginMassStorage())
+  {
+    Serial.println("Failed to start USB mass storage mode");
+  }
+
+  while (true)
+  {
+    delay(100);
+  }
+}
+
 void fetchWeatherData()
 {
-  // Send a GET request to fetch weather data
   client.println("GET /api/getstationsdata HTTP/1.1");
   client.println("Host: api.netatmo.com");
   client.print("Authorization: Bearer ");
@@ -119,10 +221,8 @@ void fetchWeatherData()
   client.println("Connection: close");
   client.println();
 
-  // Wait for the response and print it
   delay(1000);
   String response = "";
-
   while (client.available())
   {
     char c = client.read();
@@ -130,7 +230,7 @@ void fetchWeatherData()
   }
   client.stop();
   Serial.println(response);
-  // Clean the response to remove garbage data
+
   String cleanJson = cleanResponse(response);
   if (cleanJson == "")
   {
@@ -145,26 +245,20 @@ void fetchWeatherData()
 
 String cleanResponse(String response)
 {
-  // Find the start of the JSON object
   int jsonStart = response.indexOf('{');
   if (jsonStart == -1)
   {
     Serial.println("Error: No JSON object found in the response.");
     return "";
   }
-
-  // Extract the JSON part of the response
   return response.substring(jsonStart);
 }
 
 void parseWeatherData2(const String &jsonResponse)
 {
-  // String input;
-
   JsonDocument doc;
 
   DeserializationError error = deserializeJson(doc, jsonResponse);
-
   if (error)
   {
     Serial.print("deserializeJson() failed: ");
@@ -185,11 +279,11 @@ void parseWeatherData2(const String &jsonResponse)
   bool body_devices_0_co2_calibrating = body_devices_0["co2_calibrating"];
 
   JsonArray body_devices_0_data_type = body_devices_0["data_type"];
-  const char *body_devices_0_data_type_0 = body_devices_0_data_type[0]; // "Temperature"
-  const char *body_devices_0_data_type_1 = body_devices_0_data_type[1]; // "CO2"
-  const char *body_devices_0_data_type_2 = body_devices_0_data_type[2]; // "Humidity"
-  const char *body_devices_0_data_type_3 = body_devices_0_data_type[3]; // "Noise"
-  const char *body_devices_0_data_type_4 = body_devices_0_data_type[4]; // "Pressure"
+  const char *body_devices_0_data_type_0 = body_devices_0_data_type[0];
+  const char *body_devices_0_data_type_1 = body_devices_0_data_type[1];
+  const char *body_devices_0_data_type_2 = body_devices_0_data_type[2];
+  const char *body_devices_0_data_type_3 = body_devices_0_data_type[3];
+  const char *body_devices_0_data_type_4 = body_devices_0_data_type[4];
   JsonObject body_devices_0_place = body_devices_0["place"];
   int body_devices_0_place_altitude = body_devices_0_place["altitude"];
   const char *body_devices_0_place_city = body_devices_0_place["city"];
@@ -254,7 +348,7 @@ void parseWeatherData2(const String &jsonResponse)
   int body_user_administrative_pressureunit = body_user_administrative["pressureunit"];
   int body_user_administrative_feel_like_algo = body_user_administrative["feel_like_algo"];
 
-  const char *status = doc["status"];
+  const char *apiStatus = doc["status"];
   double time_exec = doc["time_exec"];
   long time_server = doc["time_server"];
 
@@ -265,6 +359,8 @@ void parseWeatherData2(const String &jsonResponse)
 
   Serial.print("Indoor Temperature: ");
   Serial.println(indoorTemp);
+  Serial.println("Clear Display");
+  oled.clearDisplay();
   String temp = String("IndoorTemp: ");
   temp.concat(indoorTemp);
   oled.drawStr(0, 10, temp.c_str());
@@ -277,9 +373,6 @@ void parseWeatherData2(const String &jsonResponse)
   String outTemp = String("OutdoorTemp: ");
   outTemp.concat(outTemperature);
   oled.drawStr(0, 40, outTemp.c_str());
-  String countString = String("Counter: ");
-  countString.concat(counter);
-  //oled.drawStr(0, 50, countString.c_str());
   oled.sendBuffer();
   Serial.print("Indoor Humidity: ");
   Serial.println(indoorHumidity);
@@ -292,13 +385,9 @@ void parseWeatherData2(const String &jsonResponse)
 
 void refreshAccessToken()
 {
-
-  const char *tokenServer = "api.netatmo.com";
   String postData = "grant_type=refresh_token&refresh_token=" + refreshToken +
-                    "&client_id=" + String(CLIENT_ID) +
-                    "&client_secret=" + String(CLIENT_SECRET);
-
-  // Send POST request
+                    "&client_id=" + clientId +
+                    "&client_secret=" + clientSecret;
 
   client.println("POST /oauth2/token HTTP/1.1");
   client.println("Host: api.netatmo.com");
@@ -309,7 +398,7 @@ void refreshAccessToken()
   client.println();
   client.println(postData);
   delay(1000);
-  // Read response
+
   String response = "";
   while (client.available())
   {
@@ -318,7 +407,6 @@ void refreshAccessToken()
   }
   client.stop();
 
-  // Check if response contains a JSON object
   int jsonStart = response.indexOf('{');
   if (jsonStart == -1)
   {
@@ -326,11 +414,9 @@ void refreshAccessToken()
     return;
   }
 
-  // Parse JSON response
   String jsonResponse = response.substring(jsonStart);
   StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, jsonResponse);
-
   if (error)
   {
     Serial.print("deserializeJson() failed: ");
@@ -338,18 +424,14 @@ void refreshAccessToken()
     return;
   }
 
-  // Extract new access token
   const char *newAccessToken = doc["access_token"];
   const char *newRefreshToken = doc["refresh_token"];
   if (newAccessToken)
   {
     accessToken = String(newAccessToken);
     refreshToken = String(newRefreshToken);
-    Serial.println("Access token & Refresh token refreshed successfully");
-    Serial.print("New Access Token: ");
-    Serial.println(accessToken);
-    Serial.print("New Refresh Token: ");
-    Serial.println(newRefreshToken);
+    Serial.println("Tokens refreshed successfully");
+    saveTokens();
   }
   else
   {

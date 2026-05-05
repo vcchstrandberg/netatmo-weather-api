@@ -4,15 +4,15 @@
 #include "IPAddress.h"
 #include <ArduinoJson.h>
 #include "Arduino_LED_Matrix.h"
+#include "arduino_secrets.h"
 #include <U8g2lib.h>
-#include <Arduino_UnifiedStorage.h>
+#include <Preferences.h>
 
-String accessToken = "";
-String refreshToken = "";
-String wifiSSID = "";
-String wifiPass = "";
-String clientId = "";
-String clientSecret = "";
+// Initial credentials from arduino_secrets.h — overridden by stored tokens after first refresh
+String accessToken = ACCESS_TOKEN;
+String refreshToken = REFRESH_TOKEN;
+char ssid[] = SECRET_SSID;
+char pass[] = SECRET_PASS;
 
 int counter = 0;
 int status = WL_IDLE_STATUS;
@@ -21,7 +21,7 @@ char server[] = "api.netatmo.com";
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
 ArduinoLEDMatrix matrix;
-QSPIFlash flashStorage;
+Preferences prefs;
 
 const char *netatmo_ca =
     "-----BEGIN CERTIFICATE-----\n"
@@ -53,9 +53,8 @@ void fetchWeatherData();
 void parseWeatherData2(const String &jsonResponse);
 void refreshAccessToken();
 String cleanResponse(String response);
-void loadConfig();
+void loadTokens();
 void saveTokens();
-void enterConfigMode();
 
 void setup()
 {
@@ -67,17 +66,8 @@ void setup()
     ;
   }
 
-  if (!flashStorage.begin())
-  {
-    Serial.println("Flash: failed to mount");
-  }
-
-  loadConfig();
-
-  if (wifiSSID.length() == 0)
-  {
-    enterConfigMode();
-  }
+  // Load persisted tokens from ESP32 NVS (overwrites hardcoded defaults if present)
+  loadTokens();
 
   Serial.println("Starting connection to server...");
 
@@ -97,8 +87,8 @@ void setup()
   while (status != WL_CONNECTED)
   {
     Serial.print("Attempting to connect to SSID: ");
-    Serial.println(wifiSSID);
-    status = WiFi.begin(wifiSSID.c_str(), wifiPass.c_str());
+    Serial.println(ssid);
+    status = WiFi.begin(ssid, pass);
     delay(10000);
   }
   client.setCACert(netatmo_ca);
@@ -128,88 +118,24 @@ void loop()
   delay(60000);
 }
 
-void loadConfig()
+// Loads persisted tokens from ESP32-S3 NVS via the Preferences library.
+// NVS uses wear-levelled flash on the ESP32 side so write frequency is not a concern.
+void loadTokens()
 {
-  Folder root = flashStorage.getRootFolder();
-  UFile f = root.openFile("config.json", FileMode::READ);
-  if (!f.available())
-  {
-    Serial.println("Config: no config.json found");
-    f.close();
-    return;
-  }
-  String content = f.readAsString();
-  f.close();
-
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, content);
-  if (error)
-  {
-    Serial.print("Config: parse failed: ");
-    Serial.println(error.c_str());
-    return;
-  }
-
-  wifiSSID     = doc["ssid"]          | "";
-  wifiPass     = doc["pass"]          | "";
-  clientId     = doc["client_id"]     | "";
-  clientSecret = doc["client_secret"] | "";
-  accessToken  = doc["access_token"]  | "";
-  refreshToken = doc["refresh_token"] | "";
-
-  Serial.println("Config loaded from flash");
+  prefs.begin("netatmo", true);
+  accessToken  = prefs.getString("access_token",  accessToken);
+  refreshToken = prefs.getString("refresh_token", refreshToken);
+  prefs.end();
+  Serial.println("Tokens loaded from storage");
 }
 
 void saveTokens()
 {
-  // Read existing config so we preserve ssid/pass/client credentials
-  Folder root = flashStorage.getRootFolder();
-  UFile rf = root.openFile("config.json", FileMode::READ);
-  String content = rf.available() ? rf.readAsString() : "{}";
-  rf.close();
-
-  JsonDocument doc;
-  deserializeJson(doc, content);
-  doc["access_token"]  = accessToken;
-  doc["refresh_token"] = refreshToken;
-
-  String output;
-  serializeJson(doc, output);
-
-  UFile wf = root.createFile("config.json", FileMode::WRITE);
-  wf.write(output);
-  wf.close();
-  Serial.println("Tokens saved to config.json");
-}
-
-// Exposes the QSPI flash as a USB drive so the user can create config.json.
-// Does not return — board must be reset after the file is created.
-void enterConfigMode()
-{
-  Serial.println("No config found. Connect via USB, create config.json, then reset the board.");
-
-  oled.clearDisplay();
-  oled.drawStr(0, 10, "No config found!");
-  oled.drawStr(0, 25, "Connect USB,");
-  oled.drawStr(0, 35, "create config.json,");
-  oled.drawStr(0, 45, "then reset board.");
-  oled.sendBuffer();
-
-  flashStorage.unmount();
-
-  // Expose QSPI flash as a USB mass storage drive.
-  // The Arduino_UnifiedStorage library handles wear-levelled LittleFS underneath.
-  // If this method name differs in your library version, check:
-  //   https://github.com/arduino-libraries/Arduino_UnifiedStorage
-  if (!flashStorage.beginMassStorage())
-  {
-    Serial.println("Failed to start USB mass storage mode");
-  }
-
-  while (true)
-  {
-    delay(100);
-  }
+  prefs.begin("netatmo", false);
+  prefs.putString("access_token",  accessToken);
+  prefs.putString("refresh_token", refreshToken);
+  prefs.end();
+  Serial.println("Tokens saved to storage");
 }
 
 void fetchWeatherData()
@@ -359,7 +285,6 @@ void parseWeatherData2(const String &jsonResponse)
 
   Serial.print("Indoor Temperature: ");
   Serial.println(indoorTemp);
-  Serial.println("Clear Display");
   oled.clearDisplay();
   String temp = String("IndoorTemp: ");
   temp.concat(indoorTemp);
@@ -386,8 +311,8 @@ void parseWeatherData2(const String &jsonResponse)
 void refreshAccessToken()
 {
   String postData = "grant_type=refresh_token&refresh_token=" + refreshToken +
-                    "&client_id=" + clientId +
-                    "&client_secret=" + clientSecret;
+                    "&client_id=" + String(CLIENT_ID) +
+                    "&client_secret=" + String(CLIENT_SECRET);
 
   client.println("POST /oauth2/token HTTP/1.1");
   client.println("Host: api.netatmo.com");

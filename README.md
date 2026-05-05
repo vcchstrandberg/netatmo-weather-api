@@ -139,30 +139,38 @@ sequenceDiagram
     participant S as ESP32 NVS
 
     A->>N: POST /oauth2/token
-    Note over A,N: grant_type=refresh_token<br/>refresh_token=&lt;current&gt;<br/>client_id / client_secret
+    Note over A,N: grant_type=refresh_token
+    Note over A,N: refresh_token, client_id, client_secret
 
     N-->>A: 200 OK
-    Note over A,N: { "access_token": "...",<br/>"refresh_token": "..." }
+    Note over N,A: access_token + refresh_token
 
-    A->>S: putString("access_token", ...)
-    A->>S: putString("refresh_token", ...)
-    Note over A,S: Tokens survive reboot
+    A->>S: putString("access_token", new_value)
+    A->>S: putString("refresh_token", new_value)
+    Note over S: Persisted across reboots
 
     A->>N: GET /api/getstationsdata
-    Note over A,N: Authorization: Bearer &lt;access_token&gt;
+    Note over A,N: Authorization: Bearer access_token
 
     N-->>A: 200 OK — weather data JSON
-    Note over A: Parse + render to OLED
+    Note over A: Parse JSON, render to OLED
 ```
 
 ---
 
 ### OLED Display Layout
 
-```mermaid
-block-beta
-    columns 1
-    display["┌──────────────────────────────┐\n│ IndoorTemp:     21.5         │\n│ IndoorHumidity: 45           │\n│ AirPressure:    1013.2       │\n│ OutdoorTemp:    8.3          │\n└──────────────────────────────┘\n        128 × 64 pixels"]
+```
+┌──────────────────────────────┐
+│ IndoorTemp:     21.5         │
+│ IndoorHumidity: 45           │
+│ AirPressure:    1013.2       │
+│ OutdoorTemp:    8.3          │
+│                              │
+│                              │
+│                              │
+└──────────────────────────────┘
+        128 × 64 pixels
 ```
 
 | Field | Source | Unit |

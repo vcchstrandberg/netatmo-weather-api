@@ -8,222 +8,169 @@ An Arduino-based weather display that pulls live data from a Netatmo Weather Sta
 
 ### Overview
 
-```
-                         HOME NETWORK
-  ┌──────────────┐                    ┌─────────────────────┐
-  │   Netatmo    │  868 MHz RF        │     Netatmo         │
-  │   Outdoor    │ ─────────────────► │  Indoor Station     │
-  │   Module     │                    │  (Base Station)     │
-  └──────────────┘                    └─────────────────────┘
-                                                │
-                                                │ WiFi
-                                                │
-  ┌───────────────────────┐                     │
-  │   Arduino Uno R4 WiFi │ ◄─── WiFi ──────────┘
-  │   + OLED Display      │
-  └───────────────────────┘
-                │
-                │ HTTPS (TLS)
-                ▼
-  ┌─────────────────────────┐
-  │   Netatmo Cloud API     │
-  │   api.netatmo.com       │
-  └─────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph home[Home Network]
+        outdoor[🌡️ Netatmo\nOutdoor Module]
+        base[🏠 Netatmo\nBase Station]
+        arduino[🖥️ Arduino\nUno R4 WiFi]
+        outdoor -->|868 MHz RF| base
+        base <-->|WiFi| arduino
+    end
+
+    cloud[☁️ Netatmo Cloud API\napi.netatmo.com]
+    oled[📺 SSD1306 OLED\n128×64]
+
+    base -->|WiFi / Internet| cloud
+    arduino -->|HTTPS / TLS| cloud
+    arduino -->|I2C| oled
 ```
 
-The Arduino polls the Netatmo cloud API every 60 seconds. The Netatmo outdoor module sends sensor readings over 868 MHz RF to the indoor base station, which uploads them to the Netatmo cloud over your home WiFi. The Arduino fetches the aggregated data from there.
+The Arduino and the Netatmo base station are both on your home network. The outdoor module sends sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino fetches the aggregated data from the cloud API every 60 seconds.
 
 ---
 
 ### Hardware Architecture
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│                     Arduino Uno R4 WiFi                        │
-│                                                                │
-│   ┌──────────────────────┐      ┌──────────────────────────┐  │
-│   │    Renesas RA4M1     │      │       ESP32-S3           │  │
-│   │    (Main MCU)        │ UART │   (WiFi Co-processor)    │  │
-│   │                      │◄────►│                          │  │
-│   │  · Runs the sketch   │      │  · WiFi 802.11 b/g/n     │  │
-│   │  · I2C controller    │      │  · TLS/HTTPS stack       │  │
-│   │  · USB (Serial)      │      │  · NVS key-value store   │  │
-│   │  · 256 KB Flash      │      │  · 2 MB Flash            │  │
-│   │  · 32 KB RAM         │      │                          │  │
-│   └──────────────────────┘      └──────────────────────────┘  │
-│              │                                                  │
-│              │ I2C (SDA/SCL)                                   │
-│              ▼                                                  │
-│   ┌──────────────────────┐                                     │
-│   │   SSD1306 OLED       │                                     │
-│   │   128 × 64 pixels    │                                     │
-│   └──────────────────────┘                                     │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph uno[Arduino Uno R4 WiFi]
+        subgraph ra4m1[Renesas RA4M1 — Main MCU]
+            sketch[Sketch / main.cpp]
+            i2c[I2C Controller]
+            usbserial[USB Serial]
+        end
+
+        subgraph esp32[ESP32-S3 — WiFi Co-processor]
+            wifistack[WiFi 802.11 b/g/n]
+            tlsstack[TLS / HTTPS Stack]
+            nvs[NVS Key-Value Store\n2 MB wear-levelled flash]
+        end
+
+        ra4m1 <-->|Internal UART\nModem protocol| esp32
+    end
+
+    oled[SSD1306 OLED\n128×64 px]
+    i2c -->|SDA / SCL| oled
 ```
 
-The RA4M1 and ESP32-S3 communicate over an internal UART using a modem-style AT command protocol. WiFi, HTTPS, and persistent storage all go through the ESP32-S3. From the sketch's perspective these are abstracted by the `WiFiS3`, `WiFiSSLClient`, and `Preferences` libraries.
+The RA4M1 runs the sketch. The ESP32-S3 handles all WiFi, TLS, and persistent storage. They communicate over an internal UART using an AT-style modem protocol, abstracted by the `WiFiS3` and `Preferences` libraries.
 
 ---
 
 ### Software Stack
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        main.cpp                              │
-│                    Application Logic                         │
-├───────────────────┬──────────────────┬───────────────────────┤
-│   ArduinoJson     │      U8g2        │     Preferences       │
-│   JSON parsing    │   OLED driver    │   NVS token storage   │
-├───────────────────┴──────────────────┴───────────────────────┤
-│              WiFiS3 / WiFiSSLClient                          │
-│         WiFi + TLS (bridged via ESP32-S3 modem)              │
-├──────────────────────────────────────────────────────────────┤
-│            Arduino Renesas RA4M1 Core (PlatformIO)           │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    main["main.cpp — Application Logic\nsetup() / loop() / fetchWeatherData()\nrefreshAccessToken() / parseWeatherData2()"]
+
+    subgraph libs[Libraries]
+        direction LR
+        json[ArduinoJson\nJSON parsing]
+        u8g2[U8g2\nOLED driver]
+        prefs[Preferences\nNVS storage]
+    end
+
+    wifi[WiFiS3 / WiFiSSLClient\nWiFi + TLS — bridged via ESP32-S3 modem]
+    core[Arduino Renesas RA4M1 Core — PlatformIO renesas-ra]
+
+    main --> libs
+    main --> wifi
+    libs --> core
+    wifi --> core
 ```
 
 ---
 
 ### Boot Sequence
 
-```
-                        Power On / Reset
-                               │
-                               ▼
-                   ┌───────────────────────┐
-                   │  Init OLED + Serial   │
-                   └───────────────────────┘
-                               │
-                               ▼
-                   ┌───────────────────────┐
-                   │  Load tokens from NVS │
-                   └───────────────────────┘
-                               │
-                  Tokens found?│
-               ┌───── Yes ─────┴───── No ──────┐
-               │                               │
-               ▼                               ▼
-    Use NVS tokens                  Use hardcoded tokens
-                                   from arduino_secrets.h
-               │                               │
-               └───────────────┬───────────────┘
-                               │
-                               ▼
-                   ┌───────────────────────┐
-                   │    Connect to WiFi    │◄──┐
-                   └───────────────────────┘   │
-                               │               │
-                         Connected?            │ Retry
-                    Yes ◄──────┴───── No ──────┘
-                    │                    (every 10s)
-                    ▼
-                   ┌───────────────────────┐
-                   │  Set TLS CA cert      │
-                   └───────────────────────┘
-                               │
-                               ▼
-                          Main Loop
+```mermaid
+flowchart TD
+    A([Power On / Reset]) --> B[Initialise OLED + Serial]
+    B --> C{Tokens stored\nin NVS?}
+    C -->|Yes| D[Load access + refresh\ntokens from NVS]
+    C -->|No| E[Use hardcoded tokens\nfrom arduino_secrets.h]
+    D --> F[Connect to WiFi]
+    E --> F
+    F --> G{Connected?}
+    G -->|No — retry| H[Wait 10 s]
+    H --> F
+    G -->|Yes| I[Set TLS CA certificate]
+    I --> J([Enter Main Loop])
 ```
 
 ---
 
-### Main Loop (every 60 seconds)
+### Main Loop
 
-```
-  ┌─────────────────────────────────────────────────────────┐
-  │                        Main Loop                        │
-  │                                                         │
-  │   ┌─────────────────────────────────────────────────┐   │
-  │   │   1. Open HTTPS connection to api.netatmo.com   │   │
-  │   └─────────────────────────────────────────────────┘   │
-  │                           │                             │
-  │                           ▼                             │
-  │   ┌─────────────────────────────────────────────────┐   │
-  │   │   2. POST /oauth2/token                         │   │
-  │   │      Refresh access & refresh tokens            │   │
-  │   │      Save new tokens to ESP32 NVS               │   │
-  │   └─────────────────────────────────────────────────┘   │
-  │                           │                             │
-  │                           ▼                             │
-  │   ┌─────────────────────────────────────────────────┐   │
-  │   │   3. Open new HTTPS connection                  │   │
-  │   └─────────────────────────────────────────────────┘   │
-  │                           │                             │
-  │                           ▼                             │
-  │   ┌─────────────────────────────────────────────────┐   │
-  │   │   4. GET /api/getstationsdata                   │   │
-  │   │      Parse JSON response (ArduinoJson)          │   │
-  │   │      Extract sensor readings                    │   │
-  │   └─────────────────────────────────────────────────┘   │
-  │                           │                             │
-  │                           ▼                             │
-  │   ┌─────────────────────────────────────────────────┐   │
-  │   │   5. Update OLED display                        │   │
-  │   └─────────────────────────────────────────────────┘   │
-  │                           │                             │
-  │                           ▼                             │
-  │                    Wait 60 seconds                      │
-  │                           │                             │
-  └───────────────────────────┼─────────────────────────────┘
-                              └─► (repeat)
+```mermaid
+flowchart TD
+    start([Loop start]) --> conn1[Open HTTPS connection\nto api.netatmo.com]
+
+    conn1 --> ok1{Connected?}
+    ok1 -->|No| err1[Log error]
+    ok1 -->|Yes| refresh[POST /oauth2/token\nrefresh tokens]
+    refresh --> save[Save new tokens to NVS]
+
+    err1 --> conn2[Open new HTTPS connection\nto api.netatmo.com]
+    save --> conn2
+
+    conn2 --> ok2{Connected?}
+    ok2 -->|No| err2[Log error]
+    ok2 -->|Yes| fetch[GET /api/getstationsdata]
+    fetch --> parse[Parse JSON response\nArduinoJson]
+    parse --> display[Update OLED display]
+
+    err2 --> wait[Wait 60 seconds]
+    display --> wait
+    wait --> start
 ```
 
 ---
 
-### OAuth2 Token Refresh Flow
+### OAuth2 Token Refresh
 
-Netatmo uses OAuth2 with rotating refresh tokens — each successful refresh invalidates the old refresh token and issues a new pair. Tokens must be persisted across reboots or the device loses access.
+Netatmo uses rotating refresh tokens — each successful refresh invalidates the old token and issues a new pair. The device must persist the latest tokens across reboots or it permanently loses access.
 
+```mermaid
+sequenceDiagram
+    participant A as Arduino Uno R4
+    participant N as Netatmo API
+    participant S as ESP32 NVS
+
+    A->>N: POST /oauth2/token
+    Note over A,N: grant_type=refresh_token<br/>refresh_token=&lt;current&gt;<br/>client_id / client_secret
+
+    N-->>A: 200 OK
+    Note over A,N: { "access_token": "...",<br/>"refresh_token": "..." }
+
+    A->>S: putString("access_token", ...)
+    A->>S: putString("refresh_token", ...)
+    Note over A,S: Tokens survive reboot
+
+    A->>N: GET /api/getstationsdata
+    Note over A,N: Authorization: Bearer &lt;access_token&gt;
+
+    N-->>A: 200 OK — weather data JSON
+    Note over A: Parse + render to OLED
 ```
-  ┌─────────────────────┐                        ┌─────────────────────┐
-  │  Arduino Uno R4     │                        │   Netatmo Cloud     │
-  │                     │  POST /oauth2/token    │                     │
-  │                     │ ──────────────────────►│                     │
-  │                     │  grant_type=           │                     │
-  │                     │    refresh_token       │                     │
-  │                     │  refresh_token=<tok>   │                     │
-  │                     │  client_id=<id>        │                     │
-  │                     │  client_secret=<sec>   │                     │
-  │                     │                        │                     │
-  │                     │◄────────────────────── │                     │
-  │                     │  { "access_token":     │                     │
-  │                     │      "new_token",      │                     │
-  │                     │    "refresh_token":    │                     │
-  │                     │      "new_token" }     │                     │
-  └─────────────────────┘                        └─────────────────────┘
-              │
-              │  prefs.putString("access_token",  ...)
-              │  prefs.putString("refresh_token", ...)
-              ▼
-  ┌─────────────────────┐
-  │   ESP32-S3 NVS      │
-  │   (wear-levelled    │
-  │    2 MB flash)      │
-  │                     │
-  │  "access_token"  →  │
-  │  "refresh_token" →  │
-  └─────────────────────┘
-```
-
-On the next reboot, `loadTokens()` reads these back from NVS, overriding the hardcoded values in `arduino_secrets.h`.
 
 ---
 
 ### OLED Display Layout
 
+```mermaid
+block-beta
+    columns 1
+    display["┌──────────────────────────────┐\n│ IndoorTemp:     21.5         │\n│ IndoorHumidity: 45           │\n│ AirPressure:    1013.2       │\n│ OutdoorTemp:    8.3          │\n└──────────────────────────────┘\n        128 × 64 pixels"]
 ```
-  ┌──────────────────────────────┐
-  │ IndoorTemp: 21.5             │  ← °C, indoor base station
-  │ IndoorHumidity: 45           │  ← %, indoor base station
-  │ AirPressure: 1013.2          │  ← hPa, indoor base station
-  │ OutdoorTemp: 8.3             │  ← °C, outdoor module
-  │                              │
-  │                              │
-  │                              │
-  │                              │
-  └──────────────────────────────┘
-           128 × 64 px
-```
+
+| Field | Source | Unit |
+|---|---|---|
+| IndoorTemp | Base station dashboard_data | °C |
+| IndoorHumidity | Base station dashboard_data | % |
+| AirPressure | Base station dashboard_data | hPa |
+| OutdoorTemp | Outdoor module dashboard_data | °C |
 
 ---
 
@@ -249,7 +196,7 @@ Credentials are stored in `include/arduino_secrets.h`, which is excluded from ve
 #define CLIENT_SECRET     "your_netatmo_client_secret"
 ```
 
-You only need to provide valid initial tokens once. After the first successful run the device persists the latest tokens to NVS and loads them on every subsequent boot.
+You only need valid initial tokens once. After the first successful run the device persists the latest tokens to NVS and loads them on every subsequent boot.
 
 ### Building and flashing
 

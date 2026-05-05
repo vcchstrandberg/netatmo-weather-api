@@ -1,28 +1,28 @@
 #include <Arduino.h>
 #include "WiFiS3.h"
 #include "WiFiSSLClient.h"
-#include "IPAddress.h"
 #include <ArduinoJson.h>
-#include "Arduino_LED_Matrix.h"
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
 #include <Preferences.h>
 
 // Initial credentials from arduino_secrets.h — overridden by stored tokens after first refresh
-String accessToken = ACCESS_TOKEN;
+String accessToken  = ACCESS_TOKEN;
 String refreshToken = REFRESH_TOKEN;
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
 
-int counter = 0;
 int status = WL_IDLE_STATUS;
-char server[] = "api.netatmo.com";
+const char *server = "api.netatmo.com";
+
+// Cap HTTP responses to prevent RAM exhaustion on the 32KB RA4M1
+const size_t MAX_RESPONSE_SIZE = 8192;
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
-ArduinoLEDMatrix matrix;
 Preferences prefs;
 
+// GoDaddy Root CA G2 — CN: Go Daddy Root Certificate Authority - G2, expires 2037-12-31
 const char *netatmo_ca =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIDxTCCAq2gAwIBAgIBADANBgkqhkiG9w0BAQsFADCBgzELMAkGA1UEBhMCVVMx\n"
@@ -48,49 +48,46 @@ const char *netatmo_ca =
     "4uJEvlz36hz1\n"
     "-----END CERTIFICATE-----\n";
 
-void printWifiStatus();
-void fetchWeatherData();
-void parseWeatherData2(const String &jsonResponse);
-void refreshAccessToken();
-String cleanResponse(String response);
 void loadTokens();
 void saveTokens();
+void fetchWeatherData();
+void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure, float outdoorTemp);
+void refreshAccessToken();
+String readHttpResponse();
 
 void setup()
 {
   oled.begin();
   oled.setFont(u8g2_font_ncenB08_tr);
   Serial.begin(115200);
-  while (!Serial)
-  {
-    ;
-  }
 
-  // Load persisted tokens from ESP32 NVS (overwrites hardcoded defaults if present)
+  // Timeout after 3s so the device boots standalone without a serial monitor connected
+  unsigned long serialDeadline = millis() + 3000;
+  while (!Serial && millis() < serialDeadline) { ; }
+
   loadTokens();
 
-  Serial.println("Starting connection to server...");
+  Serial.println("Starting...");
 
   if (WiFi.status() == WL_NO_MODULE)
   {
-    Serial.println("Communication with WiFi module failed!");
-    while (true)
-      ;
+    Serial.println("WiFi module not found!");
+    while (true) ;
   }
 
-  String fv = WiFi.firmwareVersion();
-  if (fv < WIFI_FIRMWARE_LATEST_VERSION)
+  if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION)
   {
-    Serial.println("Please upgrade the firmware");
+    Serial.println("WiFi firmware update available");
   }
 
   while (status != WL_CONNECTED)
   {
-    Serial.print("Attempting to connect to SSID: ");
+    Serial.print("Connecting to: ");
     Serial.println(ssid);
     status = WiFi.begin(ssid, pass);
     delay(10000);
   }
+
   client.setCACert(netatmo_ca);
 }
 
@@ -98,28 +95,65 @@ void loop()
 {
   if (client.connect(server, 443))
   {
-    Serial.println("Connected to Netatmo API server");
     refreshAccessToken();
   }
   else
   {
-    Serial.println("Connection to server failed");
+    Serial.println("Connection failed (token refresh)");
   }
 
   if (client.connect(server, 443))
   {
-    Serial.println("Connected to Netatmo API server");
     fetchWeatherData();
   }
   else
   {
-    Serial.println("Connection to server failed");
+    Serial.println("Connection failed (weather fetch)");
   }
+
   delay(60000);
 }
 
-// Loads persisted tokens from ESP32-S3 NVS via the Preferences library.
-// NVS uses wear-levelled flash on the ESP32 side so write frequency is not a concern.
+// Reads the full HTTP response, checks for 200 OK, strips headers,
+// and returns the JSON body. Returns empty string on any error.
+// Capped at MAX_RESPONSE_SIZE to prevent RAM exhaustion.
+String readHttpResponse()
+{
+  // Wait up to 5s for the first byte
+  unsigned long timeout = millis() + 5000;
+  while (!client.available() && millis() < timeout) { delay(10); }
+
+  if (!client.available())
+  {
+    Serial.println("HTTP response timeout");
+    client.stop();
+    return "";
+  }
+
+  String response = "";
+  while (client.available() && response.length() < MAX_RESPONSE_SIZE)
+  {
+    response += (char)client.read();
+  }
+  client.stop();
+
+  if (!response.startsWith("HTTP") || response.indexOf(" 200 ") == -1)
+  {
+    Serial.print("HTTP error: ");
+    Serial.println(response.substring(0, response.indexOf('\n')));
+    return "";
+  }
+
+  int jsonStart = response.indexOf('{');
+  if (jsonStart == -1)
+  {
+    Serial.println("No JSON found in response");
+    return "";
+  }
+
+  return response.substring(jsonStart);
+}
+
 void loadTokens()
 {
   prefs.begin("netatmo", true);
@@ -147,171 +181,48 @@ void fetchWeatherData()
   client.println("Connection: close");
   client.println();
 
-  delay(1000);
-  String response = "";
-  while (client.available())
-  {
-    char c = client.read();
-    response += c;
-  }
-  client.stop();
-  Serial.println(response);
+  String json = readHttpResponse();
+  if (json.isEmpty()) return;
 
-  String cleanJson = cleanResponse(response);
-  if (cleanJson == "")
-  {
-    Serial.println("Error: Unable to clean the response.");
-    return;
-  }
-
-  Serial.println("Cleaned JSON Response:");
-  Serial.println(cleanJson);
-  parseWeatherData2(cleanJson);
-}
-
-String cleanResponse(String response)
-{
-  int jsonStart = response.indexOf('{');
-  if (jsonStart == -1)
-  {
-    Serial.println("Error: No JSON object found in the response.");
-    return "";
-  }
-  return response.substring(jsonStart);
-}
-
-void parseWeatherData2(const String &jsonResponse)
-{
   JsonDocument doc;
-
-  DeserializationError error = deserializeJson(doc, jsonResponse);
+  DeserializationError error = deserializeJson(doc, json);
   if (error)
   {
-    Serial.print("deserializeJson() failed: ");
+    Serial.print("JSON parse failed: ");
     Serial.println(error.c_str());
     return;
   }
 
-  JsonObject body_devices_0 = doc["body"]["devices"][0];
-  const char *body_devices_0_id = body_devices_0["_id"];
-  long body_devices_0_date_setup = body_devices_0["date_setup"];
-  long body_devices_0_last_setup = body_devices_0["last_setup"];
-  const char *body_devices_0_type = body_devices_0["type"];
-  long body_devices_0_last_status_store = body_devices_0["last_status_store"];
-  const char *body_devices_0_module_name = body_devices_0["module_name"];
-  int body_devices_0_firmware = body_devices_0["firmware"];
-  int body_devices_0_wifi_status = body_devices_0["wifi_status"];
-  bool body_devices_0_reachable = body_devices_0["reachable"];
-  bool body_devices_0_co2_calibrating = body_devices_0["co2_calibrating"];
+  JsonObject indoor  = doc["body"]["devices"][0]["dashboard_data"];
+  JsonObject outdoor = doc["body"]["devices"][0]["modules"][0]["dashboard_data"];
 
-  JsonArray body_devices_0_data_type = body_devices_0["data_type"];
-  const char *body_devices_0_data_type_0 = body_devices_0_data_type[0];
-  const char *body_devices_0_data_type_1 = body_devices_0_data_type[1];
-  const char *body_devices_0_data_type_2 = body_devices_0_data_type[2];
-  const char *body_devices_0_data_type_3 = body_devices_0_data_type[3];
-  const char *body_devices_0_data_type_4 = body_devices_0_data_type[4];
-  JsonObject body_devices_0_place = body_devices_0["place"];
-  int body_devices_0_place_altitude = body_devices_0_place["altitude"];
-  const char *body_devices_0_place_city = body_devices_0_place["city"];
-  const char *body_devices_0_place_country = body_devices_0_place["country"];
-  const char *body_devices_0_place_timezone = body_devices_0_place["timezone"];
-  double body_devices_0_place_location_0 = body_devices_0_place["location"][0];
-  double body_devices_0_place_location_1 = body_devices_0_place["location"][1];
-  const char *body_devices_0_station_name = body_devices_0["station_name"];
-  const char *body_devices_0_home_id = body_devices_0["home_id"];
-  const char *body_devices_0_home_name = body_devices_0["home_name"];
+  float indoorTemp     = indoor["Temperature"];
+  int   indoorHumidity = indoor["Humidity"];
+  float airPressure    = indoor["Pressure"];
+  float outdoorTemp    = outdoor["Temperature"];
 
-  JsonObject body_devices_0_dashboard_data = body_devices_0["dashboard_data"];
-  long body_devices_0_dashboard_data_time_utc = body_devices_0_dashboard_data["time_utc"];
-  float body_devices_0_dashboard_data_Temperature = body_devices_0_dashboard_data["Temperature"];
-  int body_devices_0_dashboard_data_CO2 = body_devices_0_dashboard_data["CO2"];
-  int body_devices_0_dashboard_data_Humidity = body_devices_0_dashboard_data["Humidity"];
-  int body_devices_0_dashboard_data_Noise = body_devices_0_dashboard_data["Noise"];
-  float body_devices_0_dashboard_data_Pressure = body_devices_0_dashboard_data["Pressure"];
-  float body_devices_0_dashboard_data_AbsolutePressure = body_devices_0_dashboard_data["AbsolutePressure"];
-  float body_devices_0_dashboard_data_min_temp = body_devices_0_dashboard_data["min_temp"];
-  float body_devices_0_dashboard_data_max_temp = body_devices_0_dashboard_data["max_temp"];
-  long body_devices_0_dashboard_data_date_max_temp = body_devices_0_dashboard_data["date_max_temp"];
-  long body_devices_0_dashboard_data_date_min_temp = body_devices_0_dashboard_data["date_min_temp"];
-  const char *body_devices_0_dashboard_data_temp_trend = body_devices_0_dashboard_data["temp_trend"];
-  const char *body_devices_0_dashboard_data_pressure_trend = body_devices_0_dashboard_data["pressure_trend"];
+  Serial.print("Indoor Temp: ");     Serial.println(indoorTemp);
+  Serial.print("Indoor Humidity: "); Serial.println(indoorHumidity);
+  Serial.print("Air Pressure: ");    Serial.println(airPressure);
+  Serial.print("Outdoor Temp: ");    Serial.println(outdoorTemp);
 
-  JsonObject body_devices_0_modules_0 = body_devices_0["modules"][0];
-  const char *body_devices_0_modules_0_id = body_devices_0_modules_0["_id"];
-  const char *body_devices_0_modules_0_type = body_devices_0_modules_0["type"];
-  const char *body_devices_0_modules_0_module_name = body_devices_0_modules_0["module_name"];
-  long body_devices_0_modules_0_last_setup = body_devices_0_modules_0["last_setup"];
+  updateDisplay(indoorTemp, indoorHumidity, airPressure, outdoorTemp);
+}
 
-  const char *body_devices_0_modules_0_data_type_0 = body_devices_0_modules_0["data_type"][0];
-  const char *body_devices_0_modules_0_data_type_1 = body_devices_0_modules_0["data_type"][1];
-
-  int body_devices_0_modules_0_battery_percent = body_devices_0_modules_0["battery_percent"];
-  bool body_devices_0_modules_0_reachable = body_devices_0_modules_0["reachable"];
-  int body_devices_0_modules_0_firmware = body_devices_0_modules_0["firmware"];
-  long body_devices_0_modules_0_last_message = body_devices_0_modules_0["last_message"];
-  long body_devices_0_modules_0_last_seen = body_devices_0_modules_0["last_seen"];
-  int body_devices_0_modules_0_rf_status = body_devices_0_modules_0["rf_status"];
-  int body_devices_0_modules_0_battery_vp = body_devices_0_modules_0["battery_vp"];
-
-  JsonObject body_devices_0_modules_0_dashboard_data = body_devices_0_modules_0["dashboard_data"];
-  long body_devices_0_modules_0_dashboard_data_time_utc = body_devices_0_modules_0_dashboard_data["time_utc"];
-  int body_devices_0_modules_0_dashboard_data_Temperature = body_devices_0_modules_0_dashboard_data["Temperature"];
-  int body_devices_0_modules_0_dashboard_data_Humidity = body_devices_0_modules_0_dashboard_data["Humidity"];
-  float body_devices_0_modules_0_dashboard_data_min_temp = body_devices_0_modules_0_dashboard_data["min_temp"];
-  float body_devices_0_modules_0_dashboard_data_max_temp = body_devices_0_modules_0_dashboard_data["max_temp"];
-  long body_devices_0_modules_0_dashboard_data_date_max_temp = body_devices_0_modules_0_dashboard_data["date_max_temp"];
-  long body_devices_0_modules_0_dashboard_data_date_min_temp = body_devices_0_modules_0_dashboard_data["date_min_temp"];
-  const char *body_devices_0_modules_0_dashboard_data_temp_trend = body_devices_0_modules_0_dashboard_data["temp_trend"];
-
-  const char *body_user_mail = doc["body"]["user"]["mail"];
-
-  JsonObject body_user_administrative = doc["body"]["user"]["administrative"];
-  const char *body_user_administrative_lang = body_user_administrative["lang"];
-  const char *body_user_administrative_reg_locale = body_user_administrative["reg_locale"];
-  const char *body_user_administrative_country = body_user_administrative["country"];
-  int body_user_administrative_unit = body_user_administrative["unit"];
-  int body_user_administrative_windunit = body_user_administrative["windunit"];
-  int body_user_administrative_pressureunit = body_user_administrative["pressureunit"];
-  int body_user_administrative_feel_like_algo = body_user_administrative["feel_like_algo"];
-
-  const char *apiStatus = doc["status"];
-  double time_exec = doc["time_exec"];
-  long time_server = doc["time_server"];
-
-  float indoorTemp = body_devices_0_dashboard_data["Temperature"];
-  int indoorHumidity = body_devices_0_dashboard_data["Humidity"];
-  float airPressure = body_devices_0_dashboard_data["Pressure"];
-  float outTemperature = body_devices_0_modules_0_dashboard_data["Temperature"];
-
-  Serial.print("Indoor Temperature: ");
-  Serial.println(indoorTemp);
+void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure, float outdoorTemp)
+{
   oled.clearDisplay();
-  String temp = String("IndoorTemp: ");
-  temp.concat(indoorTemp);
-  oled.drawStr(0, 10, temp.c_str());
-  String hum = String("IndoorHumidity: ");
-  hum.concat(indoorHumidity);
-  oled.drawStr(0, 20, hum.c_str());
-  String airP = String("AirPressure: ");
-  airP.concat(airPressure);
-  oled.drawStr(0, 30, airP.c_str());
-  String outTemp = String("OutdoorTemp: ");
-  outTemp.concat(outTemperature);
-  oled.drawStr(0, 40, outTemp.c_str());
+  oled.drawStr(0, 10, ("IndoorTemp: "     + String(indoorTemp)).c_str());
+  oled.drawStr(0, 20, ("IndoorHumidity: " + String(indoorHumidity)).c_str());
+  oled.drawStr(0, 30, ("AirPressure: "    + String(airPressure)).c_str());
+  oled.drawStr(0, 40, ("OutdoorTemp: "    + String(outdoorTemp)).c_str());
   oled.sendBuffer();
-  Serial.print("Indoor Humidity: ");
-  Serial.println(indoorHumidity);
-  Serial.print("Air Pressure: ");
-  Serial.println(airPressure);
-  Serial.print("Outdoor Temperature: ");
-  Serial.println(outTemperature);
-  counter++;
 }
 
 void refreshAccessToken()
 {
   String postData = "grant_type=refresh_token&refresh_token=" + refreshToken +
-                    "&client_id=" + String(CLIENT_ID) +
+                    "&client_id="     + String(CLIENT_ID) +
                     "&client_secret=" + String(CLIENT_SECRET);
 
   client.println("POST /oauth2/token HTTP/1.1");
@@ -322,59 +233,32 @@ void refreshAccessToken()
   client.println("Connection: close");
   client.println();
   client.println(postData);
-  delay(1000);
 
-  String response = "";
-  while (client.available())
-  {
-    char c = client.read();
-    response += c;
-  }
-  client.stop();
+  String json = readHttpResponse();
+  if (json.isEmpty()) return;
 
-  int jsonStart = response.indexOf('{');
-  if (jsonStart == -1)
-  {
-    Serial.println("Error: No JSON object found in the response.");
-    return;
-  }
-
-  String jsonResponse = response.substring(jsonStart);
-  StaticJsonDocument<1024> doc;
-  DeserializationError error = deserializeJson(doc, jsonResponse);
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, json);
   if (error)
   {
-    Serial.print("deserializeJson() failed: ");
+    Serial.print("JSON parse failed: ");
     Serial.println(error.c_str());
     return;
   }
 
-  const char *newAccessToken = doc["access_token"];
+  const char *newAccessToken  = doc["access_token"];
   const char *newRefreshToken = doc["refresh_token"];
-  if (newAccessToken)
+
+  if (newAccessToken && newRefreshToken)
   {
-    accessToken = String(newAccessToken);
+    accessToken  = String(newAccessToken);
     refreshToken = String(newRefreshToken);
     Serial.println("Tokens refreshed successfully");
     saveTokens();
   }
   else
   {
-    Serial.println("Error: Unable to refresh access token");
+    Serial.print("Token refresh failed: ");
+    Serial.println(doc["error"] | "unknown error");
   }
-}
-
-void printWifiStatus()
-{
-  Serial.print("SSID: ");
-  Serial.println(WiFi.SSID());
-
-  IPAddress ip = WiFi.localIP();
-  Serial.print("IP Address: ");
-  Serial.println(ip);
-
-  long rssi = WiFi.RSSI();
-  Serial.print("Signal strength (RSSI):");
-  Serial.print(rssi);
-  Serial.println(" dBm");
 }

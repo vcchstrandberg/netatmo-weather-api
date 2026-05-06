@@ -136,8 +136,8 @@ flowchart TD
     get --> read2[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
     read2 --> ok4{Valid response?}
     ok4 -->|No| err2
-    ok4 -->|Yes| parse2[Parse JSON\nextract 4 sensor fields]
-    parse2 --> display[updateDisplay\nindoorTemp · humidity · pressure · outdoorTemp]
+    ok4 -->|Yes| parse2[Parse JSON\nextract indoor + iterate modules for NAModule1 and NAModule3]
+    parse2 --> display[updateDisplay\nindoorTemp · humidity · pressure · outdoorTemp · rain1h · rain24h · isRaining]
 
     err2 --> wait[Wait 60 seconds]
     display --> wait
@@ -180,13 +180,12 @@ sequenceDiagram
 
 ```
 ┌──────────────────────────────┐
-│ IndoorTemp:     21.5         │
+│ IndoorTemp:     21.5      💧 │  ← rain-drop icon when currently raining
 │ IndoorHumidity: 45           │
 │ AirPressure:    1013.2       │
 │ OutdoorTemp:    8.3          │
-│                              │
-│                              │
-│                              │
+│ Rain 1h:        0.6 mm       │
+│ Rain 24h:       3.2 mm       │
 └──────────────────────────────┘
         128 × 64 pixels
 ```
@@ -196,7 +195,10 @@ sequenceDiagram
 | IndoorTemp | Base station dashboard_data | °C |
 | IndoorHumidity | Base station dashboard_data | % |
 | AirPressure | Base station dashboard_data | hPa |
-| OutdoorTemp | Outdoor module dashboard_data | °C |
+| OutdoorTemp | Outdoor module (NAModule1) dashboard_data | °C |
+| Rain 1h | Rain gauge (NAModule3) sum_rain_1 | mm |
+| Rain 24h | Rain gauge (NAModule3) sum_rain_24 | mm |
+| Rain-drop icon | Shown when NAModule3 Rain > 0 | — |
 
 ---
 

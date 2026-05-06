@@ -48,10 +48,23 @@ const char *netatmo_ca =
     "4uJEvlz36hz1\n"
     "-----END CERTIFICATE-----\n";
 
+// 8×8 filled water-drop icon (XBM format: bit 0 = leftmost pixel per row)
+static const uint8_t rain_drop_bmp[] PROGMEM = {
+    0x18,  // ...XX...
+    0x3C,  // ..XXXX..
+    0x7E,  // .XXXXXX.
+    0xFF,  // XXXXXXXX
+    0xFF,  // XXXXXXXX
+    0x7E,  // .XXXXXX.
+    0x3C,  // ..XXXX..
+    0x18,  // ...XX...
+};
+
 void loadTokens();
 void saveTokens();
 void fetchWeatherData();
-void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure, float outdoorTemp);
+void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure,
+                   float outdoorTemp, float rain1h, float rain24h, bool isRaining);
 void refreshAccessToken();
 String readHttpResponse();
 
@@ -194,28 +207,48 @@ void fetchWeatherData()
   }
 
   JsonObject indoor  = doc["body"]["devices"][0]["dashboard_data"];
-  JsonObject outdoor = doc["body"]["devices"][0]["modules"][0]["dashboard_data"];
+  JsonArray  modules = doc["body"]["devices"][0]["modules"];
+
+  JsonObject outdoor;
+  JsonObject rainData;
+  for (JsonObject mod : modules)
+  {
+    const char *type = mod["type"];
+    if (!type) continue;
+    if (strcmp(type, "NAModule1") == 0) outdoor  = mod["dashboard_data"];
+    if (strcmp(type, "NAModule3") == 0) rainData = mod["dashboard_data"];
+  }
 
   float indoorTemp     = indoor["Temperature"];
   int   indoorHumidity = indoor["Humidity"];
   float airPressure    = indoor["Pressure"];
   float outdoorTemp    = outdoor["Temperature"];
+  float rain1h         = rainData["sum_rain_1"]  | 0.0f;
+  float rain24h        = rainData["sum_rain_24"] | 0.0f;
+  bool  isRaining      = (rainData["Rain"]       | 0.0f) > 0.0f;
 
   Serial.print("Indoor Temp: ");     Serial.println(indoorTemp);
   Serial.print("Indoor Humidity: "); Serial.println(indoorHumidity);
   Serial.print("Air Pressure: ");    Serial.println(airPressure);
   Serial.print("Outdoor Temp: ");    Serial.println(outdoorTemp);
+  Serial.print("Rain 1h: ");         Serial.println(rain1h);
+  Serial.print("Rain 24h: ");        Serial.println(rain24h);
 
-  updateDisplay(indoorTemp, indoorHumidity, airPressure, outdoorTemp);
+  updateDisplay(indoorTemp, indoorHumidity, airPressure, outdoorTemp, rain1h, rain24h, isRaining);
 }
 
-void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure, float outdoorTemp)
+void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure,
+                   float outdoorTemp, float rain1h, float rain24h, bool isRaining)
 {
   oled.clearDisplay();
-  oled.drawStr(0, 10, ("IndoorTemp: "     + String(indoorTemp)).c_str());
+  oled.drawStr(0, 10, ("IndoorTemp: "     + String(indoorTemp, 1)).c_str());
   oled.drawStr(0, 20, ("IndoorHumidity: " + String(indoorHumidity)).c_str());
-  oled.drawStr(0, 30, ("AirPressure: "    + String(airPressure)).c_str());
-  oled.drawStr(0, 40, ("OutdoorTemp: "    + String(outdoorTemp)).c_str());
+  oled.drawStr(0, 30, ("AirPressure: "    + String(airPressure, 1)).c_str());
+  oled.drawStr(0, 40, ("OutdoorTemp: "    + String(outdoorTemp, 1)).c_str());
+  oled.drawStr(0, 50, ("Rain 1h: "        + String(rain1h, 1) + " mm").c_str());
+  oled.drawStr(0, 60, ("Rain 24h: "       + String(rain24h, 1) + " mm").c_str());
+  if (isRaining)
+    oled.drawXBMP(120, 0, 8, 8, rain_drop_bmp);
   oled.sendBuffer();
 }
 

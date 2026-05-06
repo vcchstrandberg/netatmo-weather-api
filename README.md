@@ -11,10 +11,12 @@ An Arduino-based weather display that pulls live data from a Netatmo Weather Sta
 ```mermaid
 flowchart LR
     subgraph home[Home Network]
-        outdoor[🌡️ Netatmo\nOutdoor Module]
+        outdoor[🌡️ Netatmo\nOutdoor Module\nNAModule1]
+        rain[🌧️ Netatmo\nRain Gauge\nNAModule3]
         base[🏠 Netatmo\nBase Station]
         arduino[🖥️ Arduino\nUno R4 WiFi]
         outdoor -->|868 MHz RF| base
+        rain -->|868 MHz RF| base
         base <-->|WiFi| arduino
     end
 
@@ -26,7 +28,7 @@ flowchart LR
     arduino -->|I2C| oled
 ```
 
-The Arduino and the Netatmo base station are both on your home network. The outdoor module sends sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino fetches the aggregated data from the cloud API every 60 seconds.
+The Arduino and the Netatmo base station are both on your home network. The outdoor module and rain gauge send sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino fetches the aggregated data from the cloud API every 60 seconds.
 
 ---
 

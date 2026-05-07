@@ -273,4 +273,4 @@ Open the project folder in VS Code with PlatformIO. Select the `uno_r4_wifi` env
 
 - [X] Refresh the access token and persist it across reboots.
 - [X] OLED display showing live weather data.
-- [ ] Design a case for the display.
+- [X] Design a case for the display. See `enclosure/enclosure.scad`.

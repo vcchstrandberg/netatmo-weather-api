@@ -88,7 +88,7 @@ $fn = 48;
 module rbox(w, h, d, r) {
     linear_extrude(d)
         offset(r = r, $fn = 32)
-            square([w - 2 * r, h - 2 * r]);
+            translate([r, r]) square([w - 2 * r, h - 2 * r]);
 }
 
 // Rounded-rectangle slot centred at origin.

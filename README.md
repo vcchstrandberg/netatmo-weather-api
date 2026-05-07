@@ -60,6 +60,41 @@ The RA4M1 runs the sketch. The ESP32-S3 handles all WiFi, TLS, and persistent st
 
 ---
 
+### Wiring
+
+```mermaid
+flowchart LR
+    subgraph oled["SSD1306 OLED (128×64)"]
+        o_vcc[VCC]
+        o_gnd[GND]
+        o_sda[SDA]
+        o_scl[SCL]
+    end
+
+    subgraph uno["Arduino Uno R4 WiFi"]
+        a_5v[5V]
+        a_gnd[GND]
+        a_sda[A4 — SDA]
+        a_scl[A5 — SCL]
+    end
+
+    o_vcc --- a_5v
+    o_gnd --- a_gnd
+    o_sda --- a_sda
+    o_scl --- a_scl
+```
+
+| OLED pin | Arduino pin | Notes |
+|---|---|---|
+| VCC | 5V | Most SSD1306 breakout boards accept 3.3–5 V |
+| GND | GND | |
+| SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
+| SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |
+
+Default I2C address: `0x3C` (some modules use `0x3D` — check the silkscreen).
+
+---
+
 ### Software Stack
 
 ```mermaid

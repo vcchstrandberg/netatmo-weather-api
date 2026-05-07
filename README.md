@@ -17,7 +17,6 @@ flowchart LR
         arduino[🖥️ Arduino\nUno R4 WiFi]
         outdoor -->|868 MHz RF| base
         rain -->|868 MHz RF| base
-        base <-->|WiFi| arduino
     end
 
     cloud[☁️ Netatmo Cloud API\napi.netatmo.com]
@@ -28,7 +27,7 @@ flowchart LR
     arduino -->|I2C| oled
 ```
 
-The Arduino and the Netatmo base station are both on your home network. The outdoor module and rain gauge send sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino fetches the aggregated data from the cloud API every 60 seconds.
+The outdoor module and rain gauge send sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino connects independently to the Netatmo cloud API over HTTPS and fetches the aggregated data every 60 seconds — it has no direct connection to the base station.
 
 ---
 

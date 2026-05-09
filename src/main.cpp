@@ -240,7 +240,7 @@ void fetchWeatherData()
 void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure,
                    float outdoorTemp, float rain1h, float rain24h, bool isRaining)
 {
-  oled.clearDisplay();
+  oled.clearBuffer();
   oled.drawStr(0, 10, ("IndoorTemp: "     + String(indoorTemp, 1)).c_str());
   oled.drawStr(0, 20, ("IndoorHumidity: " + String(indoorHumidity)).c_str());
   oled.drawStr(0, 30, ("AirPressure: "    + String(airPressure, 1)).c_str());

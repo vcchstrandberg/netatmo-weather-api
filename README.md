@@ -343,7 +343,14 @@ All application logic, display code, and API communication are shared between bo
 
 ### Configuration
 
-Credentials are stored in `include/arduino_secrets.h`, which is excluded from version control. Create it with the following content:
+Each board has its own secrets file so they can have independent WiFi credentials and Netatmo tokens. The files are gitignored — create yours from the templates that ship in the repo:
+
+| Board | Secrets file |
+|---|---|
+| Arduino Uno R4 WiFi | `include/uno_r4_wifi/arduino_secrets.h` |
+| Arduino Nano 33 IoT | `include/nano33iot/arduino_secrets.h` |
+
+Fill in the real values:
 
 ```cpp
 #define SECRET_SSID       "YourWiFiSSID"
@@ -354,7 +361,9 @@ Credentials are stored in `include/arduino_secrets.h`, which is excluded from ve
 #define CLIENT_SECRET     "your_netatmo_client_secret"
 ```
 
-You only need valid initial tokens once. After the first successful run the device persists the latest tokens to flash and loads them on every subsequent boot.
+`CLIENT_ID` and `CLIENT_SECRET` are the same for both devices (they identify your Netatmo developer app). `ACCESS_TOKEN` and `REFRESH_TOKEN` must be unique per device — if two devices share the same initial token pair, whichever refreshes first will invalidate the other's token.
+
+You only need valid initial tokens once. After the first successful run the device persists the latest tokens to its local flash and loads them on every subsequent boot.
 
 ### Building and flashing
 

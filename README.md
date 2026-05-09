@@ -341,16 +341,34 @@ All application logic, display code, and API communication are shared between bo
 3. SSD1306 128×64 OLED display (I2C).
 4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
 
+### File structure
+
+After cloning, your local project should look like this before building:
+
+```
+netatmo-weather-api/
+├── include/
+│   ├── uno_r4_wifi/
+│   │   └── arduino_secrets.h   ← you create this (gitignored, never pushed)
+│   └── nano33iot/
+│       └── arduino_secrets.h   ← you create this (gitignored, never pushed)
+├── src/
+│   └── main.cpp
+├── enclosure/
+│   └── enclosure.scad
+└── platformio.ini
+```
+
+The secrets files are listed in `.gitignore` — they will never be pushed to GitHub, regardless of what you put in them. You create them manually; they are not in the repo.
+
 ### Configuration
 
-Each board has its own secrets file so they can have independent WiFi credentials and Netatmo tokens. The files are gitignored — create yours from the templates that ship in the repo:
+Each board has its own secrets file so devices can have independent WiFi credentials and Netatmo tokens. Create the file for the board you are setting up:
 
-| Board | Secrets file |
-|---|---|
-| Arduino Uno R4 WiFi | `include/uno_r4_wifi/arduino_secrets.h` |
-| Arduino Nano 33 IoT | `include/nano33iot/arduino_secrets.h` |
+**`include/uno_r4_wifi/arduino_secrets.h`** (Uno R4 WiFi)
+**`include/nano33iot/arduino_secrets.h`** (Nano 33 IoT)
 
-Fill in the real values:
+Both files have the same format:
 
 ```cpp
 #define SECRET_SSID       "YourWiFiSSID"
@@ -361,9 +379,12 @@ Fill in the real values:
 #define CLIENT_SECRET     "your_netatmo_client_secret"
 ```
 
-`CLIENT_ID` and `CLIENT_SECRET` are the same for both devices (they identify your Netatmo developer app). `ACCESS_TOKEN` and `REFRESH_TOKEN` must be unique per device — if two devices share the same initial token pair, whichever refreshes first will invalidate the other's token.
+**About the credentials:**
 
-You only need valid initial tokens once. After the first successful run the device persists the latest tokens to its local flash and loads them on every subsequent boot.
+- `CLIENT_ID` and `CLIENT_SECRET` identify your Netatmo developer app — these are the same for both devices.
+- `ACCESS_TOKEN` and `REFRESH_TOKEN` must be unique per device. If two devices start with the same token pair, whichever refreshes first invalidates the other's token.
+- You only need valid initial tokens once. After the first successful run the device saves the latest tokens to its local flash and loads them on every boot.
+- Refresh tokens expire after **60 days** of inactivity. If the device has been unpowered that long, paste fresh tokens into the secrets file and reflash. The display will show `Token expired / Reflash secrets` to remind you.
 
 ### Building and flashing
 

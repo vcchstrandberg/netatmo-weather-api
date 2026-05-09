@@ -298,12 +298,12 @@ void fetchWeatherData()
   drawCard(g_card);
 }
 
-// Card 0: indoor temp + humidity     (thermometer icon)
-// Card 1: outdoor temp + pressure    (partly-cloudy icon)
-// Card 2: rain 1h + 24h             (rain-cloud icon)
+// Card 0: indoor temp + humidity     (sun icon)
+// Card 1: outdoor temp + pressure    (cloud icon)
+// Card 2: rain 1h + 24h             (rain icon)
 //
 // Open Iconic weather 2x glyph codes (16×16 px):
-//   66 = rain cloud   68 = partly cloudy   70 = thermometer
+//   64 = cloud   65 = lightning   66 = moon   67 = rain   68 = star   69 = sun
 void drawCard(uint8_t card)
 {
   oled.clearBuffer();
@@ -312,7 +312,7 @@ void drawCard(uint8_t card)
   {
     case 0:
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
-      oled.drawGlyph(0, 16, 70); // thermometer
+      oled.drawGlyph(0, 16, 69); // sun
       oled.setFont(u8g2_font_ncenB08_tr);
       oled.drawStr(20, 12, "INDOOR");
       oled.setFont(u8g2_font_logisoso28_tr);
@@ -323,7 +323,7 @@ void drawCard(uint8_t card)
 
     case 1:
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
-      oled.drawGlyph(0, 16, 68); // partly cloudy
+      oled.drawGlyph(0, 16, 64); // cloud
       oled.setFont(u8g2_font_ncenB08_tr);
       oled.drawStr(20, 12, "OUTDOOR");
       oled.setFont(u8g2_font_logisoso28_tr);
@@ -334,7 +334,7 @@ void drawCard(uint8_t card)
 
     case 2:
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
-      oled.drawGlyph(0, 16, 66); // rain cloud
+      oled.drawGlyph(0, 16, 67); // rain
       oled.setFont(u8g2_font_ncenB08_tr);
       oled.drawStr(20, 12, "RAIN");
       if (g_isRaining)

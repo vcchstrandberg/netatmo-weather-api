@@ -276,12 +276,33 @@ Three full-screen cards rotate every 5 seconds. Each card shows a 16×16 Open Ic
 
 ---
 
+## Supported boards
+
+| | Arduino Uno R4 WiFi | Arduino Nano 33 IoT |
+|---|---|---|
+| MCU | Renesas RA4M1 (Cortex-M4, 48 MHz) | Microchip SAMD21 (Cortex-M0+, 48 MHz) |
+| RAM / Flash | 32 KB / 256 KB | 32 KB / 256 KB |
+| WiFi chip | ESP32-S3 (co-processor) | u-blox NINA-W102 (ESP32) |
+| WiFi library | `WiFiS3` | `WiFiNINA` |
+| Token storage | `Preferences` (NVS wear-levelled flash) | `FlashStorage_SAMD` (emulated EEPROM) |
+| TLS CA cert | Set explicitly via `setCACert()` | Uses NINA firmware's built-in CA store |
+| Logic voltage | 3.3 V (5 V tolerant) | **3.3 V only** |
+| PlatformIO env | `uno_r4_wifi` | `nano33iot` |
+
+All application logic, display code, and API communication are shared between both targets via `#ifdef ARDUINO_ARCH_RENESAS` / `#ifdef ARDUINO_ARCH_SAMD` guards in `main.cpp`.
+
+> **Nano 33 IoT wiring note:** The board is 3.3 V only — power the OLED from the **3V3** pin, not 5V. Most SSD1306 breakout boards accept 3.3 V on VCC without modification.
+
+> **Nano 33 IoT firmware note:** Keep the NINA firmware up to date (`Tools → Update Firmware` in the Arduino IDE) so the built-in CA store is current.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 
 1. Visual Studio Code with PlatformIO installed.
-2. Arduino Uno R4 WiFi.
+2. An Arduino Uno R4 WiFi **or** Arduino Nano 33 IoT.
 3. SSD1306 128×64 OLED display (I2C).
 4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
 
@@ -298,11 +319,26 @@ Credentials are stored in `include/arduino_secrets.h`, which is excluded from ve
 #define CLIENT_SECRET     "your_netatmo_client_secret"
 ```
 
-You only need valid initial tokens once. After the first successful run the device persists the latest tokens to NVS and loads them on every subsequent boot.
+You only need valid initial tokens once. After the first successful run the device persists the latest tokens to flash and loads them on every subsequent boot.
 
 ### Building and flashing
 
-Open the project folder in VS Code with PlatformIO. Select the `uno_r4_wifi` environment and click **Upload**.
+Open the project folder in VS Code with PlatformIO. Select the environment that matches your board from the PlatformIO toolbar, then click **Upload**:
+
+| Board | Environment |
+|---|---|
+| Arduino Uno R4 WiFi | `uno_r4_wifi` |
+| Arduino Nano 33 IoT | `nano33iot` |
+
+Or from the command line:
+
+```bash
+# Uno R4 WiFi
+pio run -e uno_r4_wifi --target upload
+
+# Nano 33 IoT
+pio run -e nano33iot --target upload
+```
 
 ---
 

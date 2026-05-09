@@ -1,10 +1,18 @@
 #include <Arduino.h>
-#include "WiFiS3.h"
-#include "WiFiSSLClient.h"
 #include <ArduinoJson.h>
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
-#include <Preferences.h>
+
+#ifdef ARDUINO_ARCH_RENESAS
+  #include "WiFiS3.h"
+  #include "WiFiSSLClient.h"
+  #include <Preferences.h>
+#elif defined(ARDUINO_ARCH_SAMD)
+  #include <WiFiNINA.h>
+  #include <FlashStorage_SAMD.h>
+#else
+  #error "Unsupported board — add an env for your target in platformio.ini"
+#endif
 
 // Initial credentials from arduino_secrets.h — overridden by stored tokens after first refresh
 String accessToken  = ACCESS_TOKEN;
@@ -20,7 +28,13 @@ const size_t MAX_RESPONSE_SIZE = 8192;
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
-Preferences prefs;
+
+#ifdef ARDUINO_ARCH_RENESAS
+  Preferences prefs;
+#elif defined(ARDUINO_ARCH_SAMD)
+  typedef struct { bool valid; char access_token[512]; char refresh_token[512]; } TokenStore;
+  FlashStorage(flash_tokens, TokenStore);
+#endif
 
 // DigiCert Global Root G2 — CN: DigiCert Global Root G2, expires 2038-01-15
 const char *netatmo_ca =
@@ -117,7 +131,11 @@ void setup()
     delay(10000);
   }
 
+#ifdef ARDUINO_ARCH_RENESAS
+  // WiFiNINA (SAMD) validates against the NINA firmware's built-in CA store,
+  // which already includes DigiCert Global Root G2 — no explicit cert needed.
   client.setCACert(netatmo_ca);
+#endif
 
   if (client.connect(server, 443)) refreshAccessToken();
   else Serial.println("Connection failed (token refresh)");
@@ -194,19 +212,36 @@ String readHttpResponse()
 
 void loadTokens()
 {
+#ifdef ARDUINO_ARCH_RENESAS
   prefs.begin("netatmo", true);
   accessToken  = prefs.getString("access_token",  accessToken);
   refreshToken = prefs.getString("refresh_token", refreshToken);
   prefs.end();
+#elif defined(ARDUINO_ARCH_SAMD)
+  TokenStore ts;
+  flash_tokens.read(ts);
+  if (ts.valid) {
+    accessToken  = String(ts.access_token);
+    refreshToken = String(ts.refresh_token);
+  }
+#endif
   Serial.println("Tokens loaded from storage");
 }
 
 void saveTokens()
 {
+#ifdef ARDUINO_ARCH_RENESAS
   prefs.begin("netatmo", false);
   prefs.putString("access_token",  accessToken);
   prefs.putString("refresh_token", refreshToken);
   prefs.end();
+#elif defined(ARDUINO_ARCH_SAMD)
+  TokenStore ts;
+  ts.valid = true;
+  accessToken.toCharArray(ts.access_token,  sizeof(ts.access_token));
+  refreshToken.toCharArray(ts.refresh_token, sizeof(ts.refresh_token));
+  flash_tokens.write(ts);
+#endif
   Serial.println("Tokens saved to storage");
 }
 

@@ -104,7 +104,7 @@ flowchart TB
         loop["loop()"]
         refresh["refreshAccessToken()"]
         fetch["fetchWeatherData()"]
-        display["updateDisplay()"]
+        display["drawCard()"]
         read["readHttpResponse()"]
         tokens["loadTokens() / saveTokens()"]
     end
@@ -135,22 +135,37 @@ flowchart TD
     B --> C{Tokens stored\nin NVS?}
     C -->|Yes| D[Load access + refresh\ntokens from NVS]
     C -->|No| E[Use hardcoded tokens\nfrom arduino_secrets.h]
-    D --> F[Connect to WiFi]
+    D --> F[Show Connecting… on OLED]
     E --> F
-    F --> G{Connected?}
-    G -->|No — retry| H[Wait 10 s]
-    H --> F
-    G -->|Yes| I[Set TLS CA certificate]
-    I --> J([Enter Main Loop])
+    F --> G[Connect to WiFi]
+    G --> H{Connected?}
+    H -->|No — retry| I[Wait 10 s]
+    I --> G
+    H -->|Yes| J[Set TLS CA certificate]
+    J --> K[Refresh token + fetch initial data]
+    K --> L[Render first card on OLED]
+    L --> M([Enter Main Loop])
 ```
 
 ---
 
 ### Main Loop
 
+The loop is non-blocking. Two independent timers run on every iteration:
+
+- **Card rotation** — every 5 s, advance to the next display card and call `drawCard()`.
+- **Data fetch** — every 60 s, refresh the OAuth token and pull fresh weather data; the new values are stored in globals and the current card re-renders immediately.
+
 ```mermaid
 flowchart TD
-    start([Loop start]) --> conn1[Open HTTPS connection\nto api.netatmo.com]
+    start([Loop iteration]) --> card{5 s elapsed\nsince last card?}
+    card -->|Yes| rotate[Advance card 0→1→2→0\ndrawCard]
+    card -->|No| fetch
+    rotate --> fetch
+
+    fetch{60 s elapsed\nsince last fetch?}
+    fetch -->|No| sleep[delay 100 ms]
+    fetch -->|Yes| conn1[Open HTTPS connection\nto api.netatmo.com]
 
     conn1 --> ok1{Connected?}
     ok1 -->|No| err1[Log error]
@@ -159,10 +174,10 @@ flowchart TD
     post --> read1[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
     read1 --> ok3{Valid response?}
     ok3 -->|No| err1
-    ok3 -->|Yes| parse1[Parse JSON\ncheck access + refresh token non-null]
+    ok3 -->|Yes| parse1[Parse JSON → store new tokens]
     parse1 --> save[saveTokens to NVS]
 
-    err1 --> conn2[Open new HTTPS connection\nto api.netatmo.com]
+    err1 --> conn2[Open HTTPS connection\nto api.netatmo.com]
     save --> conn2
 
     conn2 --> ok2{Connected?}
@@ -172,12 +187,12 @@ flowchart TD
     get --> read2[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
     read2 --> ok4{Valid response?}
     ok4 -->|No| err2
-    ok4 -->|Yes| parse2[Parse JSON\nextract indoor + iterate modules for NAModule1 and NAModule3]
-    parse2 --> display[updateDisplay\nindoorTemp · humidity · pressure · outdoorTemp · rain1h · rain24h · isRaining]
+    ok4 -->|Yes| parse2[Parse JSON → update globals\nindoorTemp · humidity · pressure\noutdoorTemp · rain1h · rain24h · isRaining]
+    parse2 --> drawcard[drawCard — refresh current card]
 
-    err2 --> wait[Wait 60 seconds]
-    display --> wait
-    wait --> start
+    err2 --> sleep
+    drawcard --> sleep
+    sleep --> start
 ```
 
 ---
@@ -214,27 +229,50 @@ sequenceDiagram
 
 ### OLED Display Layout
 
+Three full-screen cards rotate every 5 seconds. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
+
+**Card 0 — Indoor** (thermometer icon)
 ```
 ┌──────────────────────────────┐
-│ IndoorTemp:     21.5      💧 │  ← rain-drop icon when currently raining
-│ IndoorHumidity: 45           │
-│ AirPressure:    1013.2       │
-│ OutdoorTemp:    8.3          │
-│ Rain 1h:        0.6 mm       │
-│ Rain 24h:       3.2 mm       │
+│ 🌡 INDOOR                    │
+│                              │
+│  21.5C                       │  ← logisoso28 font
+│                              │
+│  Humidity: 45%               │
 └──────────────────────────────┘
-        128 × 64 pixels
 ```
 
-| Field | Source | Unit |
-|---|---|---|
-| IndoorTemp | Base station dashboard_data | °C |
-| IndoorHumidity | Base station dashboard_data | % |
-| AirPressure | Base station dashboard_data | hPa |
-| OutdoorTemp | Outdoor module (NAModule1) dashboard_data | °C |
-| Rain 1h | Rain gauge (NAModule3) sum_rain_1 | mm |
-| Rain 24h | Rain gauge (NAModule3) sum_rain_24 | mm |
-| Rain-drop icon | Shown when NAModule3 Rain > 0 | — |
+**Card 1 — Outdoor** (partly-cloudy icon)
+```
+┌──────────────────────────────┐
+│ ⛅ OUTDOOR                   │
+│                              │
+│  8.3C                        │  ← logisoso28 font
+│                              │
+│  Pressure: 1013hPa           │
+└──────────────────────────────┘
+```
+
+**Card 2 — Rain** (rain-cloud icon)
+```
+┌──────────────────────────────┐
+│ 🌧 RAIN                   💧 │  ← 💧 shown only when currently raining
+│                              │
+│  1h:  0.6mm                  │  ← logisoso16 font
+│                              │
+│  24h: 3.2mm                  │
+└──────────────────────────────┘
+```
+
+| Field | Card | Source | Unit |
+|---|---|---|---|
+| Indoor temp | 0 | Base station `dashboard_data.Temperature` | °C |
+| Indoor humidity | 0 | Base station `dashboard_data.Humidity` | % |
+| Outdoor temp | 1 | NAModule1 `dashboard_data.Temperature` | °C |
+| Air pressure | 1 | Base station `dashboard_data.Pressure` | hPa |
+| Rain 1 h | 2 | NAModule3 `dashboard_data.sum_rain_1` | mm |
+| Rain 24 h | 2 | NAModule3 `dashboard_data.sum_rain_24` | mm |
+| Rain-drop icon | 2 | NAModule3 `dashboard_data.Rain` > 0 | — |
 
 ---
 

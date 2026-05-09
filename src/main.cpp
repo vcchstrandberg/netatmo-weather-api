@@ -1,4 +1,3 @@
-// test only
 #include <Arduino.h>
 #include "WiFiS3.h"
 #include "WiFiSSLClient.h"
@@ -60,18 +59,33 @@ static const uint8_t rain_drop_bmp[] PROGMEM = {
     0x18,  // ...XX...
 };
 
+// ── Weather data (updated each fetch) ────────────────────────
+float g_indoorTemp     = 0;
+int   g_indoorHumidity = 0;
+float g_airPressure    = 0;
+float g_outdoorTemp    = 0;
+float g_rain1h         = 0;
+float g_rain24h        = 0;
+bool  g_isRaining      = false;
+bool  g_hasData        = false;
+
+// ── Display card rotation ─────────────────────────────────────
+uint8_t       g_card           = 0;
+unsigned long g_lastCardSwitch = 0;
+unsigned long g_lastFetch      = 0;
+const unsigned long CARD_MS    = 5000;
+const unsigned long FETCH_MS   = 60000;
+
 void loadTokens();
 void saveTokens();
 void fetchWeatherData();
-void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure,
-                   float outdoorTemp, float rain1h, float rain24h, bool isRaining);
+void drawCard(uint8_t card);
 void refreshAccessToken();
 String readHttpResponse();
 
 void setup()
 {
   oled.begin();
-  oled.setFont(u8g2_font_ncenB08_tr);
   Serial.begin(115200);
 
   // Timeout after 3s so the device boots standalone without a serial monitor connected
@@ -79,7 +93,6 @@ void setup()
   while (!Serial && millis() < serialDeadline) { ; }
 
   loadTokens();
-
   Serial.println("Starting...");
 
   if (WiFi.status() == WL_NO_MODULE)
@@ -89,9 +102,12 @@ void setup()
   }
 
   if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION)
-  {
     Serial.println("WiFi firmware update available");
-  }
+
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.clearBuffer();
+  oled.drawStr(0, 32, "Connecting...");
+  oled.sendBuffer();
 
   while (status != WL_CONNECTED)
   {
@@ -102,29 +118,38 @@ void setup()
   }
 
   client.setCACert(netatmo_ca);
+
+  if (client.connect(server, 443)) refreshAccessToken();
+  else Serial.println("Connection failed (token refresh)");
+
+  if (client.connect(server, 443)) fetchWeatherData();
+  else Serial.println("Connection failed (weather fetch)");
+
+  g_lastFetch      = millis();
+  g_lastCardSwitch = millis();
 }
 
 void loop()
 {
-  if (client.connect(server, 443))
+  unsigned long now = millis();
+
+  if (g_hasData && now - g_lastCardSwitch >= CARD_MS)
   {
-    refreshAccessToken();
-  }
-  else
-  {
-    Serial.println("Connection failed (token refresh)");
+    g_lastCardSwitch = now;
+    g_card = (g_card + 1) % 3;
+    drawCard(g_card);
   }
 
-  if (client.connect(server, 443))
+  if (now - g_lastFetch >= FETCH_MS)
   {
-    fetchWeatherData();
-  }
-  else
-  {
-    Serial.println("Connection failed (weather fetch)");
+    g_lastFetch = now;
+    if (client.connect(server, 443)) refreshAccessToken();
+    else Serial.println("Connection failed (token refresh)");
+    if (client.connect(server, 443)) fetchWeatherData();
+    else Serial.println("Connection failed (weather fetch)");
   }
 
-  delay(60000);
+  delay(100);
 }
 
 // Reads the full HTTP response, checks for 200 OK, strips headers,
@@ -219,36 +244,72 @@ void fetchWeatherData()
     if (strcmp(type, "NAModule3") == 0) rainData = mod["dashboard_data"];
   }
 
-  float indoorTemp     = indoor["Temperature"];
-  int   indoorHumidity = indoor["Humidity"];
-  float airPressure    = indoor["Pressure"];
-  float outdoorTemp    = outdoor["Temperature"];
-  float rain1h         = rainData["sum_rain_1"]  | 0.0f;
-  float rain24h        = rainData["sum_rain_24"] | 0.0f;
-  bool  isRaining      = (rainData["Rain"]       | 0.0f) > 0.0f;
+  g_indoorTemp     = indoor["Temperature"];
+  g_indoorHumidity = indoor["Humidity"];
+  g_airPressure    = indoor["Pressure"];
+  g_outdoorTemp    = outdoor["Temperature"];
+  g_rain1h         = rainData["sum_rain_1"]  | 0.0f;
+  g_rain24h        = rainData["sum_rain_24"] | 0.0f;
+  g_isRaining      = (rainData["Rain"]       | 0.0f) > 0.0f;
+  g_hasData        = true;
 
-  Serial.print("Indoor Temp: ");     Serial.println(indoorTemp);
-  Serial.print("Indoor Humidity: "); Serial.println(indoorHumidity);
-  Serial.print("Air Pressure: ");    Serial.println(airPressure);
-  Serial.print("Outdoor Temp: ");    Serial.println(outdoorTemp);
-  Serial.print("Rain 1h: ");         Serial.println(rain1h);
-  Serial.print("Rain 24h: ");        Serial.println(rain24h);
+  Serial.print("Indoor Temp: ");     Serial.println(g_indoorTemp);
+  Serial.print("Indoor Humidity: "); Serial.println(g_indoorHumidity);
+  Serial.print("Air Pressure: ");    Serial.println(g_airPressure);
+  Serial.print("Outdoor Temp: ");    Serial.println(g_outdoorTemp);
+  Serial.print("Rain 1h: ");         Serial.println(g_rain1h);
+  Serial.print("Rain 24h: ");        Serial.println(g_rain24h);
 
-  updateDisplay(indoorTemp, indoorHumidity, airPressure, outdoorTemp, rain1h, rain24h, isRaining);
+  drawCard(g_card);
 }
 
-void updateDisplay(float indoorTemp, int indoorHumidity, float airPressure,
-                   float outdoorTemp, float rain1h, float rain24h, bool isRaining)
+// Card 0: indoor temp + humidity     (thermometer icon)
+// Card 1: outdoor temp + pressure    (partly-cloudy icon)
+// Card 2: rain 1h + 24h             (rain-cloud icon)
+//
+// Open Iconic weather 2x glyph codes (16×16 px):
+//   66 = rain cloud   68 = partly cloudy   70 = thermometer
+void drawCard(uint8_t card)
 {
   oled.clearBuffer();
-  oled.drawStr(0, 10, ("IndoorTemp: "     + String(indoorTemp, 1)).c_str());
-  oled.drawStr(0, 20, ("IndoorHumidity: " + String(indoorHumidity)).c_str());
-  oled.drawStr(0, 30, ("AirPressure: "    + String(airPressure, 1)).c_str());
-  oled.drawStr(0, 40, ("OutdoorTemp: "    + String(outdoorTemp, 1)).c_str());
-  oled.drawStr(0, 50, ("Rain 1h: "        + String(rain1h, 1) + " mm").c_str());
-  oled.drawStr(0, 60, ("Rain 24h: "       + String(rain24h, 1) + " mm").c_str());
-  if (isRaining)
-    oled.drawXBMP(120, 0, 8, 8, rain_drop_bmp);
+
+  switch (card)
+  {
+    case 0:
+      oled.setFont(u8g2_font_open_iconic_weather_2x_t);
+      oled.drawGlyph(0, 16, 70); // thermometer
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(20, 12, "INDOOR");
+      oled.setFont(u8g2_font_logisoso28_tr);
+      oled.drawStr(0, 50, (String(g_indoorTemp, 1) + "C").c_str());
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(0, 62, ("Humidity: " + String(g_indoorHumidity) + "%").c_str());
+      break;
+
+    case 1:
+      oled.setFont(u8g2_font_open_iconic_weather_2x_t);
+      oled.drawGlyph(0, 16, 68); // partly cloudy
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(20, 12, "OUTDOOR");
+      oled.setFont(u8g2_font_logisoso28_tr);
+      oled.drawStr(0, 50, (String(g_outdoorTemp, 1) + "C").c_str());
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(0, 62, ("Pressure: " + String(g_airPressure, 0) + "hPa").c_str());
+      break;
+
+    case 2:
+      oled.setFont(u8g2_font_open_iconic_weather_2x_t);
+      oled.drawGlyph(0, 16, 66); // rain cloud
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(20, 12, "RAIN");
+      if (g_isRaining)
+        oled.drawXBMP(112, 0, 8, 8, rain_drop_bmp); // "raining now" indicator
+      oled.setFont(u8g2_font_logisoso16_tr);
+      oled.drawStr(0, 38, ("1h:  " + String(g_rain1h, 1) + "mm").c_str());
+      oled.drawStr(0, 58, ("24h: " + String(g_rain24h, 1) + "mm").c_str());
+      break;
+  }
+
   oled.sendBuffer();
 }
 

@@ -94,6 +94,7 @@ void loadTokens();
 void saveTokens();
 void fetchWeatherData();
 void drawCard(uint8_t card);
+void showError(const char* title, const char* detail = nullptr);
 void refreshAccessToken();
 String readHttpResponse();
 
@@ -120,15 +121,19 @@ void setup()
 
   oled.setFont(u8g2_font_ncenB08_tr);
   oled.clearBuffer();
-  oled.drawStr(0, 32, "Connecting...");
+  oled.drawStr(0, 20, "Connecting to WiFi:");
+  oled.drawStr(0, 34, ssid);
   oled.sendBuffer();
 
+  uint8_t wifiAttempts = 0;
   while (status != WL_CONNECTED)
   {
     Serial.print("Connecting to: ");
     Serial.println(ssid);
     status = WiFi.begin(ssid, pass);
     delay(10000);
+    if (++wifiAttempts == 3)
+      showError("WiFi failed", "Check credentials");
   }
 
 #ifdef ARDUINO_ARCH_RENESAS
@@ -138,10 +143,10 @@ void setup()
 #endif
 
   if (client.connect(server, 443)) refreshAccessToken();
-  else Serial.println("Connection failed (token refresh)");
+  else { Serial.println("Connection failed (token refresh)"); showError("API unreachable", "Token refresh"); }
 
   if (client.connect(server, 443)) fetchWeatherData();
-  else Serial.println("Connection failed (weather fetch)");
+  else { Serial.println("Connection failed (weather fetch)"); showError("API unreachable", "Weather fetch"); }
 
   g_lastFetch      = millis();
   g_lastCardSwitch = millis();
@@ -162,9 +167,9 @@ void loop()
   {
     g_lastFetch = now;
     if (client.connect(server, 443)) refreshAccessToken();
-    else Serial.println("Connection failed (token refresh)");
+    else { Serial.println("Connection failed (token refresh)"); showError("API unreachable", "Token refresh"); }
     if (client.connect(server, 443)) fetchWeatherData();
-    else Serial.println("Connection failed (weather fetch)");
+    else { Serial.println("Connection failed (weather fetch)"); showError("API unreachable", "Weather fetch"); }
   }
 
   delay(100);
@@ -298,6 +303,20 @@ void fetchWeatherData()
   drawCard(g_card);
 }
 
+void showError(const char* title, const char* detail)
+{
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_open_iconic_embedded_2x_t);
+  oled.drawGlyph(0, 16, 71); // exclamation / alert icon
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.drawStr(20, 12, "ERROR");
+  oled.drawStr(0, 30, title);
+  if (detail)
+    oled.drawStr(0, 44, detail);
+  oled.drawStr(0, 58, "Retrying...");
+  oled.sendBuffer();
+}
+
 // Card 0: indoor temp + humidity     (sun icon)
 // Card 1: outdoor temp + pressure    (cloud icon)
 // Card 2: rain 1h + 24h             (rain icon)
@@ -389,5 +408,6 @@ void refreshAccessToken()
   {
     Serial.print("Token refresh failed: ");
     Serial.println(doc["error"] | "unknown error");
+    showError("Token expired", "Reflash secrets");
   }
 }

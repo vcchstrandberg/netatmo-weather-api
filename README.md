@@ -59,7 +59,7 @@ The RA4M1 runs the sketch. The ESP32-S3 handles all WiFi, TLS, and persistent st
 
 ---
 
-### Wiring
+### Wiring — Arduino Uno R4 WiFi
 
 ```mermaid
 flowchart LR
@@ -86,6 +86,41 @@ flowchart LR
 | OLED pin | Arduino pin | Notes |
 |---|---|---|
 | VCC | 5V | Most SSD1306 breakout boards accept 3.3–5 V |
+| GND | GND | |
+| SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
+| SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |
+
+---
+
+### Wiring — Arduino Nano 33 IoT
+
+> **3.3 V only.** The Nano 33 IoT is not 5 V tolerant on any pin. Power the OLED from **3V3**, not 5V.
+
+```mermaid
+flowchart LR
+    subgraph oled["SSD1306 OLED (128×64)"]
+        o_vcc[VCC]
+        o_gnd[GND]
+        o_sda[SDA]
+        o_scl[SCL]
+    end
+
+    subgraph nano["Arduino Nano 33 IoT"]
+        a_3v3[3V3]
+        a_gnd[GND]
+        a_sda[A4 — SDA]
+        a_scl[A5 — SCL]
+    end
+
+    o_vcc --- a_3v3
+    o_gnd --- a_gnd
+    o_sda --- a_sda
+    o_scl --- a_scl
+```
+
+| OLED pin | Arduino pin | Notes |
+|---|---|---|
+| VCC | 3V3 | Do **not** use 5V — the Nano 33 IoT is 3.3 V only |
 | GND | GND | |
 | SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
 | SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |

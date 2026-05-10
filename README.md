@@ -341,24 +341,89 @@ Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
 - You only need valid initial tokens once. After the first successful run the device saves the latest tokens to its local flash and loads them on every boot.
 - Refresh tokens expire after **60 days** of inactivity. If the device has been unpowered that long, paste fresh tokens into the secrets file and reflash. The display will show `Token expired / Reflash secrets` to remind you.
 
+### Finding the board's USB port
+
+When you plug in the board, it appears as a serial device. To find it:
+
+**macOS / Linux**
+```bash
+ls /dev/cu.usbmodem*   # macOS
+ls /dev/ttyACM*        # Linux
+```
+
+Plug the board in, run the command, then unplug and run it again — the entry that disappears is your board. On macOS it typically looks like `/dev/cu.usbmodemF0F5BD51B13C2`.
+
+**Windows**
+
+Open Device Manager and look under **Ports (COM & LPT)** — it shows as `Arduino Uno R4 WiFi (COMx)`.
+
+PlatformIO auto-detects the port when there is exactly one board connected. If you have multiple boards or the detection fails, pass the port explicitly:
+
+```bash
+pio run -e uno_r4_wifi --target upload --upload-port /dev/cu.usbmodemF0F5BD51B13C2
+```
+
+---
+
 ### Building and flashing
 
 **Terminal (CLI)**
 
+Install PlatformIO Core if you haven't already:
+
 ```bash
-# Build only
+pip install platformio
+```
+
+Then from the project root:
+
+```bash
+# Compile only — produces .pio/build/uno_r4_wifi/firmware.bin
 pio run -e uno_r4_wifi
 
-# Build and flash
+# Compile and flash to the connected board
 pio run -e uno_r4_wifi --target upload
+```
 
-# Open serial monitor
+The first build downloads all required toolchains and libraries automatically (~500 MB, one-time). Subsequent builds are incremental and take a few seconds.
+
+---
+
+### Serial monitor
+
+The board prints boot diagnostics and runtime status over USB serial at 115200 baud. To read it:
+
+```bash
 pio device monitor -e uno_r4_wifi
+```
+
+PlatformIO auto-detects the port. Press **Ctrl-C** to exit. You can also use any serial terminal (e.g. `screen`, `minicom`, PuTTY) pointed at the same port and baud rate:
+
+```bash
+screen /dev/cu.usbmodemF0F5BD51B13C2 115200
+# Press Ctrl-A then K to exit screen
+```
+
+Typical boot output:
+```
+=== Boot ===
+Serial OK
+I2C scan:
+  Device at 0x3C
+  Device at 0x60
+oled.begin() = true (OK)
+Tokens loaded from storage
+Starting...
+Connecting to: YourWiFi
+Tokens refreshed successfully
+Tokens saved to storage
+Indoor Temp: 21.50
+...
 ```
 
 **VS Code**
 
-Open the project folder with the PlatformIO extension installed and use the Upload button in the PlatformIO toolbar.
+Open the project folder with the PlatformIO extension installed and use the Upload and Serial Monitor buttons in the PlatformIO toolbar.
 
 ---
 

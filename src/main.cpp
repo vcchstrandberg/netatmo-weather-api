@@ -1,32 +1,110 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+
+// Locale IDs — defined before arduino_secrets.h so LOCALE resolves at include time
+#define LOCALE_EN_US 1
+#define LOCALE_EN_GB 2
+#define LOCALE_SV_SE 3
+#define LOCALE_FR_FR 4
+
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
 #include <Wire.h>
-
 #include "WiFiS3.h"
 #include "WiFiSSLClient.h"
 #include <Preferences.h>
 
-// Initial credentials from arduino_secrets.h — overridden by stored tokens after first refresh
+// ── Locale ────────────────────────────────────────────────────────────────────
+struct Locale {
+  const char* indoor;
+  const char* outdoor;
+  const char* rain;
+  const char* humidity;
+  const char* pressure;
+  const char* temp_unit;
+  const char* pressure_unit;
+  const char* rain_unit;
+  uint8_t     pressure_decimals;
+  uint8_t     rain_decimals;
+  bool        fahrenheit;
+  bool        inhg;
+  bool        inches;
+  const char* connecting;
+  const char* wifi_failed;
+  const char* check_creds;
+  const char* retrying;
+  const char* api_unreachable;
+  const char* token_expired;
+  const char* reflash;
+};
+
+static const Locale L_EN_US = {
+  "INDOOR",     "OUTDOOR",    "RAIN",
+  "Humidity: ", "Pressure: ",
+  "F",          "inHg",       "in",
+  2, 2, true, true, true,
+  "Connecting to WiFi:", "WiFi failed",  "Check credentials",
+  "Retrying...",         "API unreachable", "Token expired", "Reflash secrets"
+};
+static const Locale L_EN_GB = {
+  "INDOOR",     "OUTDOOR",    "RAIN",
+  "Humidity: ", "Pressure: ",
+  "C",          "hPa",        "mm",
+  0, 1, false, false, false,
+  "Connecting to WiFi:", "WiFi failed",  "Check credentials",
+  "Retrying...",         "API unreachable", "Token expired", "Reflash secrets"
+};
+static const Locale L_SV_SE = {
+  "INNE",       "UTE",        "REGN",
+  "Fukt: ",     "Tryck: ",
+  "C",          "hPa",        "mm",
+  0, 1, false, false, false,
+  "Ansluter WiFi:",     "WiFi fel",     "Kontrollera",
+  "Forsoker...",        "API oatkomlig", "Token utgatt",  "Ladda om cfg"
+};
+static const Locale L_FR_FR = {
+  "INTERIEUR",  "EXTERIEUR",  "PLUIE",
+  "Humidite: ", "Pression: ",
+  "C",          "hPa",        "mm",
+  0, 1, false, false, false,
+  "Connexion WiFi:",    "WiFi echoue",  "Ver. identifiants",
+  "Reessai...",         "API inaccessible", "Token expire", "Reflasher cfg"
+};
+
+#if   LOCALE == LOCALE_EN_US
+static const Locale* g_loc = &L_EN_US;
+#elif LOCALE == LOCALE_EN_GB
+static const Locale* g_loc = &L_EN_GB;
+#elif LOCALE == LOCALE_SV_SE
+static const Locale* g_loc = &L_SV_SE;
+#elif LOCALE == LOCALE_FR_FR
+static const Locale* g_loc = &L_FR_FR;
+#else
+#error "Unknown LOCALE — set LOCALE in arduino_secrets.h to LOCALE_EN_US, LOCALE_EN_GB, LOCALE_SV_SE, or LOCALE_FR_FR"
+#endif
+
+inline float toDisplayTemp(float c)     { return g_loc->fahrenheit ? c * 9.0f / 5.0f + 32.0f : c; }
+inline float toDisplayPressure(float h) { return g_loc->inhg       ? h * 0.02953f              : h; }
+inline float toDisplayRain(float mm)    { return g_loc->inches     ? mm * 0.03937f             : mm; }
+
+// ── Credentials (overridden by stored tokens after first refresh) ─────────────
 String accessToken  = ACCESS_TOKEN;
 String refreshToken = REFRESH_TOKEN;
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
 
 int status = WL_IDLE_STATUS;
-const char *server = "api.netatmo.com";
+const char* server = "api.netatmo.com";
 
 // Cap HTTP responses to prevent RAM exhaustion on the 32KB RA4M1
 const size_t MAX_RESPONSE_SIZE = 8192;
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
-
 Preferences prefs;
 
 // DigiCert Global Root G2 — CN: DigiCert Global Root G2, expires 2038-01-15
-const char *netatmo_ca =
+const char* netatmo_ca =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\n"
     "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
@@ -62,17 +140,18 @@ static const uint8_t rain_drop_bmp[] PROGMEM = {
     0x18,  // ...XX...
 };
 
-// ── Weather data (updated each fetch) ────────────────────────
-float g_indoorTemp     = 0;
-int   g_indoorHumidity = 0;
-float g_airPressure    = 0;
-float g_outdoorTemp    = 0;
-float g_rain1h         = 0;
-float g_rain24h        = 0;
-bool  g_isRaining      = false;
-bool  g_hasData        = false;
+// ── Weather data (updated each fetch) ────────────────────────────────────────
+float  g_indoorTemp     = 0;
+int    g_indoorHumidity = 0;
+float  g_airPressure    = 0;
+float  g_outdoorTemp    = 0;
+float  g_rain1h         = 0;
+float  g_rain24h        = 0;
+bool   g_isRaining      = false;
+bool   g_hasData        = false;
+String g_city           = "";
 
-// ── Display card rotation ─────────────────────────────────────
+// ── Display card rotation ─────────────────────────────────────────────────────
 uint8_t       g_card           = 0;
 unsigned long g_lastCardSwitch = 0;
 unsigned long g_lastFetch      = 0;
@@ -145,7 +224,7 @@ void setup()
 
   oled.setFont(u8g2_font_ncenB08_tr);
   oled.clearBuffer();
-  oled.drawStr(0, 20, "Connecting to WiFi:");
+  oled.drawStr(0, 20, g_loc->connecting);
   oled.drawStr(0, 34, ssid);
   oled.sendBuffer();
 
@@ -157,16 +236,16 @@ void setup()
     status = WiFi.begin(ssid, pass);
     delay(10000);
     if (++wifiAttempts == 3)
-      showError("WiFi failed", "Check credentials");
+      showError(g_loc->wifi_failed, g_loc->check_creds);
   }
 
   client.setCACert(netatmo_ca);
 
   if (client.connect(server, 443)) refreshAccessToken();
-  else { Serial.println("Connection failed (token refresh)"); showError("API unreachable", "Token refresh"); }
+  else { Serial.println("Connection failed (token refresh)"); showError(g_loc->api_unreachable, "Token refresh"); }
 
   if (client.connect(server, 443)) fetchWeatherData();
-  else { Serial.println("Connection failed (weather fetch)"); showError("API unreachable", "Weather fetch"); }
+  else { Serial.println("Connection failed (weather fetch)"); showError(g_loc->api_unreachable, "Weather fetch"); }
 
   g_lastFetch      = millis();
   g_lastCardSwitch = millis();
@@ -187,9 +266,9 @@ void loop()
   {
     g_lastFetch = now;
     if (client.connect(server, 443)) refreshAccessToken();
-    else { Serial.println("Connection failed (token refresh)"); showError("API unreachable", "Token refresh"); }
+    else { Serial.println("Connection failed (token refresh)"); showError(g_loc->api_unreachable, "Token refresh"); }
     if (client.connect(server, 443)) fetchWeatherData();
-    else { Serial.println("Connection failed (weather fetch)"); showError("API unreachable", "Weather fetch"); }
+    else { Serial.println("Connection failed (weather fetch)"); showError(g_loc->api_unreachable, "Weather fetch"); }
   }
 
   delay(100);
@@ -274,6 +353,9 @@ void fetchWeatherData()
     return;
   }
 
+  const char* city = doc["body"]["devices"][0]["place"]["city"];
+  if (city) g_city = String(city);
+
   JsonObject indoor  = doc["body"]["devices"][0]["dashboard_data"];
   JsonArray  modules = doc["body"]["devices"][0]["modules"];
 
@@ -281,7 +363,7 @@ void fetchWeatherData()
   JsonObject rainData;
   for (JsonObject mod : modules)
   {
-    const char *type = mod["type"];
+    const char* type = mod["type"];
     if (!type) continue;
     if (strcmp(type, "NAModule1") == 0) outdoor  = mod["dashboard_data"];
     if (strcmp(type, "NAModule3") == 0) rainData = mod["dashboard_data"];
@@ -296,12 +378,13 @@ void fetchWeatherData()
   g_isRaining      = (rainData["Rain"]       | 0.0f) > 0.0f;
   g_hasData        = true;
 
-  Serial.print("Indoor Temp: ");     Serial.println(g_indoorTemp);
-  Serial.print("Indoor Humidity: "); Serial.println(g_indoorHumidity);
-  Serial.print("Air Pressure: ");    Serial.println(g_airPressure);
-  Serial.print("Outdoor Temp: ");    Serial.println(g_outdoorTemp);
-  Serial.print("Rain 1h: ");         Serial.println(g_rain1h);
-  Serial.print("Rain 24h: ");        Serial.println(g_rain24h);
+  Serial.print("City: ");           Serial.println(g_city);
+  Serial.print("Indoor Temp: ");    Serial.println(g_indoorTemp);
+  Serial.print("Indoor Humidity: ");Serial.println(g_indoorHumidity);
+  Serial.print("Air Pressure: ");   Serial.println(g_airPressure);
+  Serial.print("Outdoor Temp: ");   Serial.println(g_outdoorTemp);
+  Serial.print("Rain 1h: ");        Serial.println(g_rain1h);
+  Serial.print("Rain 24h: ");       Serial.println(g_rain24h);
 
   drawCard(g_card);
 }
@@ -316,12 +399,12 @@ void showError(const char* title, const char* detail)
   oled.drawStr(0, 30, title);
   if (detail)
     oled.drawStr(0, 44, detail);
-  oled.drawStr(0, 58, "Retrying...");
+  oled.drawStr(0, 58, g_loc->retrying);
   oled.sendBuffer();
 }
 
 // Card 0: indoor temp + humidity     (sun icon)
-// Card 1: outdoor temp + pressure    (cloud icon)
+// Card 1: outdoor temp + pressure    (cloud icon) — city name as title if known
 // Card 2: rain 1h + 24h             (rain icon)
 //
 // Open Iconic weather 2x glyph codes (16×16 px):
@@ -336,34 +419,34 @@ void drawCard(uint8_t card)
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
       oled.drawGlyph(0, 16, 69); // sun
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(20, 12, "INDOOR");
+      oled.drawStr(20, 12, g_loc->indoor);
       oled.setFont(u8g2_font_logisoso28_tr);
-      oled.drawStr(0, 50, (String(g_indoorTemp, 1) + "C").c_str());
+      oled.drawStr(0, 50, (String(toDisplayTemp(g_indoorTemp), 1) + g_loc->temp_unit).c_str());
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(0, 62, ("Humidity: " + String(g_indoorHumidity) + "%").c_str());
+      oled.drawStr(0, 62, (String(g_loc->humidity) + String(g_indoorHumidity) + "%").c_str());
       break;
 
     case 1:
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
       oled.drawGlyph(0, 16, 64); // cloud
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(20, 12, "OUTDOOR");
+      oled.drawStr(20, 12, g_city.length() > 0 ? g_city.c_str() : g_loc->outdoor);
       oled.setFont(u8g2_font_logisoso28_tr);
-      oled.drawStr(0, 50, (String(g_outdoorTemp, 1) + "C").c_str());
+      oled.drawStr(0, 50, (String(toDisplayTemp(g_outdoorTemp), 1) + g_loc->temp_unit).c_str());
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(0, 62, ("Pressure: " + String(g_airPressure, 0) + "hPa").c_str());
+      oled.drawStr(0, 62, (String(g_loc->pressure) + String(toDisplayPressure(g_airPressure), g_loc->pressure_decimals) + g_loc->pressure_unit).c_str());
       break;
 
     case 2:
       oled.setFont(u8g2_font_open_iconic_weather_2x_t);
       oled.drawGlyph(0, 16, 67); // rain
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(20, 12, "RAIN");
+      oled.drawStr(20, 12, g_loc->rain);
       if (g_isRaining)
         oled.drawXBMP(112, 0, 8, 8, rain_drop_bmp); // "raining now" indicator
       oled.setFont(u8g2_font_logisoso16_tr);
-      oled.drawStr(0, 38, ("1h:  " + String(g_rain1h, 1) + "mm").c_str());
-      oled.drawStr(0, 58, ("24h: " + String(g_rain24h, 1) + "mm").c_str());
+      oled.drawStr(0, 38, ("1h:  " + String(toDisplayRain(g_rain1h),  g_loc->rain_decimals) + g_loc->rain_unit).c_str());
+      oled.drawStr(0, 58, ("24h: " + String(toDisplayRain(g_rain24h), g_loc->rain_decimals) + g_loc->rain_unit).c_str());
       break;
   }
 
@@ -397,8 +480,8 @@ void refreshAccessToken()
     return;
   }
 
-  const char *newAccessToken  = doc["access_token"];
-  const char *newRefreshToken = doc["refresh_token"];
+  const char* newAccessToken  = doc["access_token"];
+  const char* newRefreshToken = doc["refresh_token"];
 
   if (newAccessToken && newRefreshToken)
   {
@@ -411,6 +494,6 @@ void refreshAccessToken()
   {
     Serial.print("Token refresh failed: ");
     Serial.println(doc["error"] | "unknown error");
-    showError("Token expired", "Reflash secrets");
+    showError(g_loc->token_expired, g_loc->reflash);
   }
 }

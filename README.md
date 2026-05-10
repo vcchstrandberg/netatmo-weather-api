@@ -323,6 +323,25 @@ The secrets files are listed in `.gitignore` — they will never be pushed to Gi
 
 ### Configuration
 
+#### Locale and units
+
+Set your locale in `platformio.ini` under `build_flags`:
+
+```ini
+-DLOCALE=LOCALE_SV_SE
+```
+
+| Locale | Language | Temp | Pressure | Rain |
+|---|---|---|---|---|
+| `LOCALE_EN_US` | English (US) | °F | inHg | in |
+| `LOCALE_EN_GB` | English (UK) | °C | hPa | mm |
+| `LOCALE_SV_SE` | Svenska | °C | hPa | mm |
+| `LOCALE_FR_FR` | Français | °C | hPa | mm |
+
+The city name is pulled automatically from the Netatmo API and shown on the outdoor card.
+
+#### Credentials
+
 Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
 
 ```cpp
@@ -336,10 +355,10 @@ Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
 
 **About the credentials:**
 
-- `CLIENT_ID` and `CLIENT_SECRET` identify your Netatmo developer app — these are the same for both devices.
-- `ACCESS_TOKEN` and `REFRESH_TOKEN` must be unique per device. If two devices start with the same token pair, whichever refreshes first invalidates the other's token.
+- `CLIENT_ID` and `CLIENT_SECRET` identify your Netatmo developer app — these are the same for all devices.
+- `ACCESS_TOKEN` and `REFRESH_TOKEN` must be unique per device. If two devices share the same token pair, whichever refreshes first invalidates the other's.
 - You only need valid initial tokens once. After the first successful run the device saves the latest tokens to its local flash and loads them on every boot.
-- Refresh tokens expire after **60 days** of inactivity. If the device has been unpowered that long, paste fresh tokens into the secrets file and reflash. The display will show `Token expired / Reflash secrets` to remind you.
+- Refresh tokens expire after **60 days** of inactivity. If the device has been unpowered that long, paste fresh tokens into the secrets file and reflash. The display will show `Token expired` to remind you.
 
 ### Finding the board's USB port
 

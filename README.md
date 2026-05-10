@@ -70,17 +70,25 @@ flowchart LR
         o_scl[SCL]
     end
 
+    subgraph btn["Locale Button"]
+        b_a[Pin A]
+        b_b[Pin B]
+    end
+
     subgraph uno["Arduino Uno R4 WiFi"]
         a_5v[5V]
         a_gnd[GND]
         a_sda[A4 — SDA]
         a_scl[A5 — SCL]
+        a_d7[D7]
     end
 
     o_vcc --- a_5v
     o_gnd --- a_gnd
     o_sda --- a_sda
     o_scl --- a_scl
+    b_a --- a_d7
+    b_b --- a_gnd
 ```
 
 | OLED pin | Arduino pin | Notes |
@@ -89,6 +97,11 @@ flowchart LR
 | GND | GND | |
 | SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
 | SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |
+
+| Button pin | Arduino pin | Notes |
+|---|---|---|
+| A | D7 | Internal pull-up enabled — no resistor needed |
+| B | GND | |
 
 #### Locale button
 

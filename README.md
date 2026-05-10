@@ -462,6 +462,7 @@ Open the project folder with the PlatformIO extension installed and use the Uplo
 
 | Version | Commit | Date | Notes |
 |---|---|---|---|
+| v1.11 | [`c47bf68`](../../commit/c47bf68) | 2026-05-10 | Runtime locale switching via push button on D7. Cycles sv-SE → en-US → en-GB → fr-FR. No recompile needed. |
 | v1.1 | [`690098e`](../../commit/690098e) | 2026-05-10 | Locale support (en-US, en-GB, sv-SE, fr-FR) with unit conversions (°F/inHg/in for en-US). City name pulled from Netatmo API and shown on outdoor card. |
 | v1.0 | [`f240fd0`](../../commit/f240fd0) | 2026-05-10 | First versioned release. Dropped Nano 33 IoT support — UNO R4 WiFi only. Added version splash screen showing app version, build date, and git commit hash. |
 | — | [`c0b101f`](../../commit/c0b101f) | — | Initial commit. Base PlatformIO project. |

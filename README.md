@@ -92,43 +92,6 @@ flowchart LR
 
 ---
 
-### Wiring — Arduino Nano 33 IoT
-
-> **3.3 V only.** The Nano 33 IoT is not 5 V tolerant on any pin. Power the OLED from **3V3**, not 5V.
-
-```mermaid
-flowchart LR
-    subgraph oled["SSD1306 OLED (128×64)"]
-        o_vcc[VCC]
-        o_gnd[GND]
-        o_sda[SDA]
-        o_scl[SCL]
-    end
-
-    subgraph nano["Arduino Nano 33 IoT"]
-        a_3v3[3V3]
-        a_gnd[GND]
-        a_sda[A4 — SDA]
-        a_scl[A5 — SCL]
-    end
-
-    o_vcc --- a_3v3
-    o_gnd --- a_gnd
-    o_sda --- a_sda
-    o_scl --- a_scl
-```
-
-| OLED pin | Arduino pin | Notes |
-|---|---|---|
-| VCC | 3V3 | Do **not** use 5V — the Nano 33 IoT is 3.3 V only |
-| GND | GND | |
-| SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
-| SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |
-
-Default I2C address: `0x3C` (some modules use `0x3D` — check the silkscreen).
-
----
-
 ### Software Stack
 
 ```mermaid
@@ -167,7 +130,8 @@ flowchart TB
 ```mermaid
 flowchart TD
     A([Power On / Reset]) --> B[Initialise OLED + Serial]
-    B --> C{Tokens stored\nin NVS?}
+    B --> S[Show version splash\napp version · build date · git commit · 5 s]
+    S --> C{Tokens stored\nin NVS?}
     C -->|Yes| D[Load access + refresh\ntokens from NVS]
     C -->|No| E[Use hardcoded tokens\nfrom arduino_secrets.h]
     D --> F[Show Connecting… on OLED]
@@ -264,7 +228,18 @@ sequenceDiagram
 
 ### OLED Display Layout
 
-Three full-screen cards rotate every 5 seconds. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
+On boot a version splash is shown for 5 seconds:
+
+```
+┌──────────────────────────────┐
+│ Netatmo Weather              │
+│ v1.0                         │
+│ May 10 2026                  │
+│ f240fd0                      │  ← git commit hash
+└──────────────────────────────┘
+```
+
+Three full-screen cards then rotate every 5 seconds. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
 
 **Card 0 — Indoor** (thermometer icon)
 ```
@@ -311,24 +286,9 @@ Three full-screen cards rotate every 5 seconds. Each card shows a 16×16 Open Ic
 
 ---
 
-## Supported boards
+## Supported board
 
-| | Arduino Uno R4 WiFi | Arduino Nano 33 IoT |
-|---|---|---|
-| MCU | Renesas RA4M1 (Cortex-M4, 48 MHz) | Microchip SAMD21 (Cortex-M0+, 48 MHz) |
-| RAM / Flash | 32 KB / 256 KB | 32 KB / 256 KB |
-| WiFi chip | ESP32-S3 (co-processor) | u-blox NINA-W102 (ESP32) |
-| WiFi library | `WiFiS3` | `WiFiNINA` |
-| Token storage | `Preferences` (NVS wear-levelled flash) | `FlashStorage_SAMD` (emulated EEPROM) |
-| TLS CA cert | Set explicitly via `setCACert()` | Uses NINA firmware's built-in CA store |
-| Logic voltage | 3.3 V (5 V tolerant) | **3.3 V only** |
-| PlatformIO env | `uno_r4_wifi` | `nano33iot` |
-
-All application logic, display code, and API communication are shared between both targets via `#ifdef ARDUINO_ARCH_RENESAS` / `#ifdef ARDUINO_ARCH_SAMD` guards in `main.cpp`.
-
-> **Nano 33 IoT wiring note:** The board is 3.3 V only — power the OLED from the **3V3** pin, not 5V. Most SSD1306 breakout boards accept 3.3 V on VCC without modification.
-
-> **Nano 33 IoT firmware note:** Keep the NINA firmware up to date (`Tools → Update Firmware` in the Arduino IDE) so the built-in CA store is current.
+**Arduino Uno R4 WiFi** — Renesas RA4M1 (Cortex-M4, 48 MHz), 32 KB RAM, 256 KB Flash. WiFi handled by the on-board ESP32-S3 co-processor via the `WiFiS3` library. Tokens persisted in wear-levelled NVS flash via `Preferences`.
 
 ---
 
@@ -337,7 +297,7 @@ All application logic, display code, and API communication are shared between bo
 ### Prerequisites
 
 1. Visual Studio Code with PlatformIO installed.
-2. An Arduino Uno R4 WiFi **or** Arduino Nano 33 IoT.
+2. An Arduino Uno R4 WiFi.
 3. SSD1306 128×64 OLED display (I2C).
 4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
 
@@ -348,10 +308,10 @@ After cloning, your local project should look like this before building:
 ```
 netatmo-weather-api/
 ├── include/
-│   ├── uno_r4_wifi/
-│   │   └── arduino_secrets.h   ← you create this (gitignored, never pushed)
-│   └── nano33iot/
+│   └── uno_r4_wifi/
 │       └── arduino_secrets.h   ← you create this (gitignored, never pushed)
+├── scripts/
+│   └── version.py              ← injects git commit hash at build time
 ├── src/
 │   └── main.cpp
 ├── enclosure/
@@ -363,12 +323,7 @@ The secrets files are listed in `.gitignore` — they will never be pushed to Gi
 
 ### Configuration
 
-Each board has its own secrets file so devices can have independent WiFi credentials and Netatmo tokens. Create the file for the board you are setting up:
-
-**`include/uno_r4_wifi/arduino_secrets.h`** (Uno R4 WiFi)
-**`include/nano33iot/arduino_secrets.h`** (Nano 33 IoT)
-
-Both files have the same format:
+Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
 
 ```cpp
 #define SECRET_SSID       "YourWiFiSSID"
@@ -388,21 +343,10 @@ Both files have the same format:
 
 ### Building and flashing
 
-Open the project folder in VS Code with PlatformIO. Select the environment that matches your board from the PlatformIO toolbar, then click **Upload**:
-
-| Board | Environment |
-|---|---|
-| Arduino Uno R4 WiFi | `uno_r4_wifi` |
-| Arduino Nano 33 IoT | `nano33iot` |
-
-Or from the command line:
+Open the project folder in VS Code with PlatformIO and click **Upload**, or from the command line:
 
 ```bash
-# Uno R4 WiFi
 pio run -e uno_r4_wifi --target upload
-
-# Nano 33 IoT
-pio run -e nano33iot --target upload
 ```
 
 ---

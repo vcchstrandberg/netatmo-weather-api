@@ -2,17 +2,11 @@
 #include <ArduinoJson.h>
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
+#include <Wire.h>
 
-#ifdef ARDUINO_ARCH_RENESAS
-  #include "WiFiS3.h"
-  #include "WiFiSSLClient.h"
-  #include <Preferences.h>
-#elif defined(ARDUINO_ARCH_SAMD)
-  #include <WiFiNINA.h>
-  #include <FlashStorage_SAMD.h>
-#else
-  #error "Unsupported board — add an env for your target in platformio.ini"
-#endif
+#include "WiFiS3.h"
+#include "WiFiSSLClient.h"
+#include <Preferences.h>
 
 // Initial credentials from arduino_secrets.h — overridden by stored tokens after first refresh
 String accessToken  = ACCESS_TOKEN;
@@ -29,12 +23,7 @@ const size_t MAX_RESPONSE_SIZE = 8192;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 WiFiSSLClient client;
 
-#ifdef ARDUINO_ARCH_RENESAS
-  Preferences prefs;
-#elif defined(ARDUINO_ARCH_SAMD)
-  typedef struct { bool valid; char access_token[512]; char refresh_token[512]; } TokenStore;
-  FlashStorage(flash_tokens, TokenStore);
-#endif
+Preferences prefs;
 
 // DigiCert Global Root G2 — CN: DigiCert Global Root G2, expires 2038-01-15
 const char *netatmo_ca =
@@ -100,12 +89,47 @@ String readHttpResponse();
 
 void setup()
 {
-  oled.begin();
   Serial.begin(115200);
-
   // Timeout after 3s so the device boots standalone without a serial monitor connected
   unsigned long serialDeadline = millis() + 3000;
   while (!Serial && millis() < serialDeadline) { ; }
+
+  Serial.println("=== Boot ===");
+  Serial.println("Serial OK");
+
+  // I2C scan — find what addresses are actually present on the bus
+  Wire.begin();
+  Serial.println("I2C scan:");
+  uint8_t found = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    uint8_t err = Wire.endTransmission();
+    if (err == 0) {
+      Serial.print("  Device at 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      found++;
+    }
+  }
+  if (found == 0) Serial.println("  No I2C devices found!");
+
+  Serial.println("Calling oled.begin()...");
+  bool oledOk = oled.begin();
+  Serial.print("oled.begin() = ");
+  Serial.println(oledOk ? "true (OK)" : "false (FAILED)");
+
+  if (oledOk) {
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_ncenB08_tr);
+    oled.drawStr(0, 12, "Netatmo Weather");
+    oled.drawStr(0, 28, "v" APP_VERSION);
+    oled.drawStr(0, 44, __DATE__);
+    oled.drawStr(0, 60, GIT_COMMIT);
+    oled.sendBuffer();
+    delay(5000);
+  } else {
+    Serial.println("OLED init failed — skipping draw");
+  }
 
   loadTokens();
   Serial.println("Starting...");
@@ -136,11 +160,7 @@ void setup()
       showError("WiFi failed", "Check credentials");
   }
 
-#ifdef ARDUINO_ARCH_RENESAS
-  // WiFiNINA (SAMD) validates against the NINA firmware's built-in CA store,
-  // which already includes DigiCert Global Root G2 — no explicit cert needed.
   client.setCACert(netatmo_ca);
-#endif
 
   if (client.connect(server, 443)) refreshAccessToken();
   else { Serial.println("Connection failed (token refresh)"); showError("API unreachable", "Token refresh"); }
@@ -217,36 +237,19 @@ String readHttpResponse()
 
 void loadTokens()
 {
-#ifdef ARDUINO_ARCH_RENESAS
   prefs.begin("netatmo", true);
   accessToken  = prefs.getString("access_token",  accessToken);
   refreshToken = prefs.getString("refresh_token", refreshToken);
   prefs.end();
-#elif defined(ARDUINO_ARCH_SAMD)
-  TokenStore ts;
-  flash_tokens.read(ts);
-  if (ts.valid) {
-    accessToken  = String(ts.access_token);
-    refreshToken = String(ts.refresh_token);
-  }
-#endif
   Serial.println("Tokens loaded from storage");
 }
 
 void saveTokens()
 {
-#ifdef ARDUINO_ARCH_RENESAS
   prefs.begin("netatmo", false);
   prefs.putString("access_token",  accessToken);
   prefs.putString("refresh_token", refreshToken);
   prefs.end();
-#elif defined(ARDUINO_ARCH_SAMD)
-  TokenStore ts;
-  ts.valid = true;
-  accessToken.toCharArray(ts.access_token,  sizeof(ts.access_token));
-  refreshToken.toCharArray(ts.refresh_token, sizeof(ts.refresh_token));
-  flash_tokens.write(ts);
-#endif
   Serial.println("Tokens saved to storage");
 }
 

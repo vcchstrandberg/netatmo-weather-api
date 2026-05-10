@@ -175,14 +175,19 @@ flowchart TD
 
 ### Main Loop
 
-The loop is non-blocking. Two independent timers run on every iteration:
+The loop is non-blocking. Three independent inputs are checked on every iteration:
 
+- **Locale button** — checked first on every tick; a press cycles the locale and shows the language name for 1.5 s.
 - **Card rotation** — every 5 s, advance to the next display card and call `drawCard()`.
 - **Data fetch** — every 60 s, refresh the OAuth token and pull fresh weather data; the new values are stored in globals and the current card re-renders immediately.
 
 ```mermaid
 flowchart TD
-    start([Loop iteration]) --> card{5 s elapsed\nsince last card?}
+    start([Loop iteration]) --> btn{D7 button\npressed?}
+    btn -->|Yes — debounced 300 ms| locale[Advance locale\nsv-SE→en-US→en-GB→fr-FR\nShow language name 1.5 s\ndrawCard]
+    btn -->|No| card
+
+    locale --> card{5 s elapsed\nsince last card?}
     card -->|Yes| rotate[Advance card 0→1→2→0\ndrawCard]
     card -->|No| fetch
     rotate --> fetch
@@ -211,7 +216,7 @@ flowchart TD
     get --> read2[readHttpResponse\nwait 5s · cap 8KB · check 200 OK]
     read2 --> ok4{Valid response?}
     ok4 -->|No| err2
-    ok4 -->|Yes| parse2[Parse JSON → update globals\nindoorTemp · humidity · pressure\noutdoorTemp · rain1h · rain24h · isRaining]
+    ok4 -->|Yes| parse2[Parse JSON → update globals\nindoorTemp · humidity · pressure\noutdoorTemp · rain1h · rain24h · isRaining · city]
     parse2 --> drawcard[drawCard — refresh current card]
 
     err2 --> sleep
@@ -253,49 +258,61 @@ sequenceDiagram
 
 ### OLED Display Layout
 
-On boot a version splash is shown for 5 seconds:
+**Boot splash** — shown for 5 seconds:
 
 ```
 ┌──────────────────────────────┐
 │ Netatmo Weather              │
-│ v1.0                         │
+│ v1.11                        │
 │ May 10 2026                  │
-│ f240fd0                      │  ← git commit hash
+│ c47bf68                      │  ← git commit hash
 └──────────────────────────────┘
 ```
 
-Three full-screen cards then rotate every 5 seconds. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
+**Locale switch** — shown for 1.5 seconds when the D7 button is pressed:
 
-**Card 0 — Indoor** (thermometer icon)
 ```
 ┌──────────────────────────────┐
-│ 🌡 INDOOR                    │
+│ Language:                    │
 │                              │
-│  21.5C                       │  ← logisoso28 font
+│  Svenska                     │  ← logisoso16 font
 │                              │
-│  Humidity: 45%               │
+│  sv-SE                       │
 └──────────────────────────────┘
 ```
 
-**Card 1 — Outdoor** (partly-cloudy icon)
+Three full-screen cards then rotate every 5 seconds. Labels and units reflect the active locale. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
+
+**Card 0 — Indoor** (sun icon)
 ```
 ┌──────────────────────────────┐
-│ ⛅ OUTDOOR                   │
+│ ☀ INNE / INDOOR / INTERIEUR  │  ← locale label
 │                              │
-│  8.3C                        │  ← logisoso28 font
+│  21.5C / 70.7F               │  ← logisoso28 font; unit per locale
 │                              │
-│  Pressure: 1013hPa           │
+│  Fukt: 45% / Humidity: 45%   │  ← locale label
 └──────────────────────────────┘
 ```
 
-**Card 2 — Rain** (rain-cloud icon)
+**Card 1 — Outdoor** (cloud icon)
 ```
 ┌──────────────────────────────┐
-│ 🌧 RAIN                   💧 │  ← 💧 shown only when currently raining
+│ ⛅ Stockholm                  │  ← city name from Netatmo API
 │                              │
-│  1h:  0.6mm                  │  ← logisoso16 font
+│  8.3C / 46.9F                │  ← logisoso28 font; unit per locale
 │                              │
-│  24h: 3.2mm                  │
+│  Tryck: 1013hPa / 29.92inHg  │  ← locale label and unit
+└──────────────────────────────┘
+```
+
+**Card 2 — Rain** (rain icon)
+```
+┌──────────────────────────────┐
+│ 🌧 REGN / RAIN / PLUIE    💧 │  ← 💧 shown only when currently raining
+│                              │
+│  1h:  0.6mm / 0.02in         │  ← logisoso16 font; unit per locale
+│                              │
+│  24h: 3.2mm / 0.13in         │
 └──────────────────────────────┘
 ```
 

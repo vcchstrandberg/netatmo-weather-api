@@ -296,7 +296,7 @@ Three full-screen cards then rotate every 5 seconds. Each card shows a 16×16 Op
 
 ### Prerequisites
 
-1. Visual Studio Code with PlatformIO installed.
+1. PlatformIO — either the VS Code extension or the CLI (`pip install platformio`).
 2. An Arduino Uno R4 WiFi.
 3. SSD1306 128×64 OLED display (I2C).
 4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
@@ -343,11 +343,22 @@ Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
 
 ### Building and flashing
 
-Open the project folder in VS Code with PlatformIO and click **Upload**, or from the command line:
+**Terminal (CLI)**
 
 ```bash
+# Build only
+pio run -e uno_r4_wifi
+
+# Build and flash
 pio run -e uno_r4_wifi --target upload
+
+# Open serial monitor
+pio device monitor -e uno_r4_wifi
 ```
+
+**VS Code**
+
+Open the project folder with the PlatformIO extension installed and use the Upload button in the PlatformIO toolbar.
 
 ---
 

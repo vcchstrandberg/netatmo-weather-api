@@ -90,6 +90,18 @@ flowchart LR
 | SDA | A4 (SDA) | Hardware I2C — pull-ups on board, no resistors needed |
 | SCL | A5 (SCL) | Hardware I2C — pull-ups on board, no resistors needed |
 
+#### Locale button
+
+A momentary push button on **D7** cycles through the available locales at runtime. No resistor needed — the pin uses the internal pull-up.
+
+```
+D7  ──── [ button ] ──── GND
+```
+
+Each press advances: sv-SE → en-US → en-GB → fr-FR → sv-SE …
+
+The display briefly shows the new language name before resuming the weather cards.
+
 ---
 
 ### Software Stack

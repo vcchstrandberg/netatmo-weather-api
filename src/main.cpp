@@ -1,12 +1,5 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-
-// Locale IDs — defined before arduino_secrets.h so LOCALE resolves at include time
-#define LOCALE_EN_US 1
-#define LOCALE_EN_GB 2
-#define LOCALE_SV_SE 3
-#define LOCALE_FR_FR 4
-
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
 #include <Wire.h>
@@ -14,8 +7,12 @@
 #include "WiFiSSLClient.h"
 #include <Preferences.h>
 
+#define BUTTON_PIN 7
+
 // ── Locale ────────────────────────────────────────────────────────────────────
 struct Locale {
+  const char* name;
+  const char* code;
   const char* indoor;
   const char* outdoor;
   const char* rain;
@@ -38,7 +35,17 @@ struct Locale {
   const char* reflash;
 };
 
+static const Locale L_SV_SE = {
+  "Svenska",    "sv-SE",
+  "INNE",       "UTE",        "REGN",
+  "Fukt: ",     "Tryck: ",
+  "C",          "hPa",        "mm",
+  0, 1, false, false, false,
+  "Ansluter WiFi:",  "WiFi fel",      "Kontrollera",
+  "Forsoker...",     "API oatkomlig", "Token utgatt", "Ladda om cfg"
+};
 static const Locale L_EN_US = {
+  "English US", "en-US",
   "INDOOR",     "OUTDOOR",    "RAIN",
   "Humidity: ", "Pressure: ",
   "F",          "inHg",       "in",
@@ -47,6 +54,7 @@ static const Locale L_EN_US = {
   "Retrying...",         "API unreachable", "Token expired", "Reflash secrets"
 };
 static const Locale L_EN_GB = {
+  "English UK", "en-GB",
   "INDOOR",     "OUTDOOR",    "RAIN",
   "Humidity: ", "Pressure: ",
   "C",          "hPa",        "mm",
@@ -54,34 +62,21 @@ static const Locale L_EN_GB = {
   "Connecting to WiFi:", "WiFi failed",  "Check credentials",
   "Retrying...",         "API unreachable", "Token expired", "Reflash secrets"
 };
-static const Locale L_SV_SE = {
-  "INNE",       "UTE",        "REGN",
-  "Fukt: ",     "Tryck: ",
-  "C",          "hPa",        "mm",
-  0, 1, false, false, false,
-  "Ansluter WiFi:",     "WiFi fel",     "Kontrollera",
-  "Forsoker...",        "API oatkomlig", "Token utgatt",  "Ladda om cfg"
-};
 static const Locale L_FR_FR = {
+  "Francais",   "fr-FR",
   "INTERIEUR",  "EXTERIEUR",  "PLUIE",
   "Humidite: ", "Pression: ",
   "C",          "hPa",        "mm",
   0, 1, false, false, false,
-  "Connexion WiFi:",    "WiFi echoue",  "Ver. identifiants",
-  "Reessai...",         "API inaccessible", "Token expire", "Reflasher cfg"
+  "Connexion WiFi:", "WiFi echoue",   "Ver. identifiants",
+  "Reessai...",      "API inaccessible", "Token expire", "Reflasher cfg"
 };
 
-#if   LOCALE == LOCALE_EN_US
-static const Locale* g_loc = &L_EN_US;
-#elif LOCALE == LOCALE_EN_GB
-static const Locale* g_loc = &L_EN_GB;
-#elif LOCALE == LOCALE_SV_SE
-static const Locale* g_loc = &L_SV_SE;
-#elif LOCALE == LOCALE_FR_FR
-static const Locale* g_loc = &L_FR_FR;
-#else
-#error "Unknown LOCALE — set LOCALE in arduino_secrets.h to LOCALE_EN_US, LOCALE_EN_GB, LOCALE_SV_SE, or LOCALE_FR_FR"
-#endif
+// Cycle order: sv-SE → en-US → en-GB → fr-FR → sv-SE …
+static const Locale* const locales[] = { &L_SV_SE, &L_EN_US, &L_EN_GB, &L_FR_FR };
+static const uint8_t LOCALE_COUNT = 4;
+static uint8_t       g_localeIndex = 0;
+static const Locale* g_loc         = locales[0];
 
 inline float toDisplayTemp(float c)     { return g_loc->fahrenheit ? c * 9.0f / 5.0f + 32.0f : c; }
 inline float toDisplayPressure(float h) { return g_loc->inhg       ? h * 0.02953f              : h; }
@@ -168,6 +163,8 @@ String readHttpResponse();
 
 void setup()
 {
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
   Serial.begin(115200);
   // Timeout after 3s so the device boots standalone without a serial monitor connected
   unsigned long serialDeadline = millis() + 3000;
@@ -251,9 +248,23 @@ void setup()
   g_lastCardSwitch = millis();
 }
 
+void showLocale();
+
 void loop()
 {
   unsigned long now = millis();
+
+  // Button: cycle locale on press (debounced 300 ms)
+  static unsigned long lastPress = 0;
+  if (digitalRead(BUTTON_PIN) == LOW && now - lastPress > 300)
+  {
+    lastPress = now;
+    g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
+    g_loc = locales[g_localeIndex];
+    Serial.print("Locale: "); Serial.println(g_loc->code);
+    showLocale();
+    if (g_hasData) drawCard(g_card);
+  }
 
   if (g_hasData && now - g_lastCardSwitch >= CARD_MS)
   {
@@ -272,6 +283,19 @@ void loop()
   }
 
   delay(100);
+}
+
+void showLocale()
+{
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.drawStr(0, 12, "Language:");
+  oled.setFont(u8g2_font_logisoso16_tr);
+  oled.drawStr(0, 38, g_loc->name);
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.drawStr(0, 54, g_loc->code);
+  oled.sendBuffer();
+  delay(1500);
 }
 
 // Reads the full HTTP response, checks for 200 OK, strips headers,

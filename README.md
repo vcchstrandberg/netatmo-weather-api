@@ -1,6 +1,6 @@
 # netatmo-weather-api
 
-An Arduino-based weather display that pulls live data from a Netatmo Weather Station and shows it on a small OLED screen — no app or web interface needed.
+An Arduino-based weather display that pulls live data from a Netatmo Weather Station and shows it on a small screen — no app or web interface needed. Supports three boards: Arduino Uno R4 WiFi (SSD1306 OLED), ESP32 DevKit (SSD1306 OLED), and Waveshare ESP32-C6 Touch LCD 1.47 (integrated 172×320 IPS TFT).
 
 ---
 
@@ -14,20 +14,20 @@ flowchart LR
         outdoor[🌡️ Netatmo\nOutdoor Module\nNAModule1]
         rain[🌧️ Netatmo\nRain Gauge\nNAModule3]
         base[🏠 Netatmo\nBase Station]
-        arduino[🖥️ Arduino\nUno R4 WiFi]
+        device[🖥️ Arduino / ESP32\nWeather Display]
         outdoor -->|868 MHz RF| base
         rain -->|868 MHz RF| base
     end
 
     cloud[☁️ Netatmo Cloud API\napi.netatmo.com]
-    oled[📺 SSD1306 OLED\n128×64]
+    display[📺 Display\nOLED or TFT]
 
     base -->|WiFi / Internet| cloud
-    arduino -->|HTTPS / TLS| cloud
-    arduino -->|I2C| oled
+    device -->|HTTPS / TLS| cloud
+    device -->|I2C or SPI| display
 ```
 
-The outdoor module and rain gauge send sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The Arduino connects independently to the Netatmo cloud API over HTTPS and fetches the aggregated data every 60 seconds — it has no direct connection to the base station.
+The outdoor module and rain gauge send sensor readings over 868 MHz RF to the base station, which uploads them to the Netatmo cloud. The display device connects independently to the Netatmo cloud API over HTTPS and fetches the aggregated data — it has no direct connection to the base station.
 
 ---
 
@@ -157,6 +157,25 @@ Because the ESP32 deep-sleeps between fetches, `loop()` never runs and the butto
 
 ---
 
+### Wiring — Waveshare ESP32-C6 Touch LCD 1.47
+
+The display is integrated on the board — no external display wiring is required. The SPI connection between the ESP32-C6 and the ST7789 panel is made on-board and configured in `include/esp32c6_waveshare_lcd/LGFX_config.h`.
+
+| Signal | ESP32-C6 GPIO | Notes |
+|---|---|---|
+| SPI MOSI (SDA) | GPIO6 | On-board — no soldering |
+| SPI SCLK (SCL) | GPIO7 | On-board — no soldering |
+| CS | GPIO14 | On-board — no soldering |
+| DC | GPIO15 | On-board — no soldering |
+| RST | GPIO21 | On-board — no soldering |
+| Backlight | GPIO22 | On-board — HIGH = on |
+
+#### Locale switching on Waveshare ESP32-C6
+
+Same behaviour as the ESP32 DevKit: the chip deep-sleeps between fetches. **Hold the BOOT button (GPIO9) at power-on or during any wake** to cycle the locale. The display briefly shows the new language name before continuing. The locale is stored in RTC memory.
+
+---
+
 ### Software Stack
 
 ```mermaid
@@ -164,7 +183,7 @@ flowchart TB
     subgraph main[main.cpp — Application Logic]
         direction LR
         setup["setup()"]
-        loop["loop()"]
+        loop["loop() — Uno R4 only"]
         refresh["refreshAccessToken()"]
         fetch["fetchWeatherData()"]
         display["drawCard()"]
@@ -172,15 +191,16 @@ flowchart TB
         tokens["loadTokens() / saveTokens()"]
     end
 
-    subgraph libs[Libraries]
+    subgraph libs[Libraries — selected by platform]
         direction LR
         json[ArduinoJson\nJSON parsing]
-        u8g2[U8g2\nOLED driver]
+        u8g2[U8g2\nSSD1306 OLED — Uno R4 + ESP32 DevKit]
+        lgfx[LovyanGFX\nST7789 TFT — Waveshare ESP32-C6]
         prefs[Preferences\nNVS storage]
     end
 
-    wifi[WiFiS3 / WiFiSSLClient\nWiFi + TLS — bridged via ESP32-S3 modem]
-    core[Arduino Renesas RA4M1 Core — PlatformIO renesas-ra]
+    wifi["WiFiS3/WiFiSSLClient — Uno R4\nWiFiClientSecure — ESP32 / ESP32-C6"]
+    core["renesas-ra core — Uno R4\nespressif32 — ESP32 DevKit\npioarduino espressif32 — ESP32-C6"]
 
     main --> libs
     main --> wifi
@@ -272,9 +292,9 @@ Netatmo uses rotating refresh tokens — each successful refresh invalidates the
 
 ```mermaid
 sequenceDiagram
-    participant A as Arduino Uno R4
+    participant A as Device
     participant N as Netatmo API
-    participant S as ESP32 NVS
+    participant S as NVS flash
 
     A->>N: POST /oauth2/token
     Note over A,N: grant_type=refresh_token
@@ -285,31 +305,47 @@ sequenceDiagram
 
     A->>S: putString("access_token", new_value)
     A->>S: putString("refresh_token", new_value)
-    Note over S: Persisted across reboots
+    Note over S: Persisted across reboots and deep sleep
 
     A->>N: GET /api/getstationsdata
     Note over A,N: Authorization: Bearer access_token
 
     N-->>A: 200 OK — weather data JSON
-    Note over A: Parse JSON, render to OLED
+    Note over A: Parse JSON, render to display
 ```
 
 ---
 
-### OLED Display Layout
+### Display Layout
+
+Both display variants show the same three data cards. Labels and units reflect the active locale.
+
+| Field | Card | Source | Unit |
+|---|---|---|---|
+| Indoor temp | 0 | Base station `dashboard_data.Temperature` | °C / °F |
+| Indoor humidity | 0 | Base station `dashboard_data.Humidity` | % |
+| Outdoor temp | 1 | NAModule1 `dashboard_data.Temperature` | °C / °F |
+| Air pressure | 1 | Base station `dashboard_data.Pressure` | hPa / inHg |
+| Rain 1 h | 2 | NAModule3 `dashboard_data.sum_rain_1` | mm / in |
+| Rain 24 h | 2 | NAModule3 `dashboard_data.sum_rain_24` | mm / in |
+| Rain-now indicator | 2 | NAModule3 `dashboard_data.Rain` > 0 | — |
+
+---
+
+#### SSD1306 OLED layout (Uno R4 WiFi · ESP32 DevKit) — 128×64
 
 **Boot splash** — shown for 5 seconds:
 
 ```
 ┌──────────────────────────────┐
 │ Netatmo Weather              │
-│ v1.11                        │
-│ May 10 2026                  │
-│ c47bf68                      │  ← git commit hash
+│ v1.3                         │
+│ May 13 2026                  │
+│ 14244ed                      │  ← git commit hash
 └──────────────────────────────┘
 ```
 
-**Locale switch** — shown for 1.5 seconds when the D7 button is pressed:
+**Locale switch** — shown for 1.5 seconds:
 
 ```
 ┌──────────────────────────────┐
@@ -321,7 +357,7 @@ sequenceDiagram
 └──────────────────────────────┘
 ```
 
-Three full-screen cards then rotate every 5 seconds. Labels and units reflect the active locale. Each card shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
+Three full-screen cards rotate every 5 seconds. Each shows a 16×16 Open Iconic weather icon, a large primary value, and a smaller secondary value.
 
 **Card 0 — Indoor** (sun icon)
 ```
@@ -356,26 +392,85 @@ Three full-screen cards then rotate every 5 seconds. Labels and units reflect th
 └──────────────────────────────┘
 ```
 
-| Field | Card | Source | Unit |
-|---|---|---|---|
-| Indoor temp | 0 | Base station `dashboard_data.Temperature` | °C |
-| Indoor humidity | 0 | Base station `dashboard_data.Humidity` | % |
-| Outdoor temp | 1 | NAModule1 `dashboard_data.Temperature` | °C |
-| Air pressure | 1 | Base station `dashboard_data.Pressure` | hPa |
-| Rain 1 h | 2 | NAModule3 `dashboard_data.sum_rain_1` | mm |
-| Rain 24 h | 2 | NAModule3 `dashboard_data.sum_rain_24` | mm |
-| Rain-drop icon | 2 | NAModule3 `dashboard_data.Rain` > 0 | — |
+---
+
+#### TFT display layout (Waveshare ESP32-C6) — 320×172 landscape
+
+**Boot splash** — shown only on cold boot (not on every deep-sleep wake):
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Netatmo Weather                                                │
+│ v1.3                                                           │
+│ May 13 2026                                                    │
+│ 14244ed                                                        │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Locale switch** — shown for 1.5 seconds when BOOT is held at wake:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Language:                                                      │
+│                                                                │
+│  Svenska                                                       │
+│                                                                │
+│  sv-SE                                                         │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Three cards rotate across deep-sleep cycles (one card per wake). Each card has a coloured header bar, a large primary value, and a secondary line.
+
+**Card 0 — Indoor** (warm amber header)
+```
+┌────────────────────────────────────────────────────────────────┐
+│▓▓▓▓▓▓ INNE / INDOOR ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ sv-SE ▓▓▓▓▓▓│
+│                                                                │
+│  21.5           C                                              │  ← 48px 7-segment + unit
+│                                                                │
+│                                                                │
+│                                                                │
+│  Fukt: 45% / Humidity: 45%                                     │  ← secondary line
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Card 1 — Outdoor** (sky-blue header)
+```
+┌────────────────────────────────────────────────────────────────┐
+│▓▓▓▓▓▓ Stockholm ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ sv-SE ▓▓▓▓▓▓│  ← city name
+│                                                                │
+│  8.3            C                                              │
+│                                                                │
+│                                                                │
+│                                                                │
+│  Tryck: 1013hPa / 29.92inHg                                    │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Card 2 — Rain** (teal header)
+```
+┌────────────────────────────────────────────────────────────────┐
+│▓▓▓▓▓▓ REGN / RAIN ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ * sv-SE ▓▓▓▓▓▓│  ← * = raining now
+│                                                                │
+│  1h:  0.6mm / 0.02in                                           │  ← 26px font
+│                                                                │
+│  24h: 3.2mm / 0.13in                                           │
+│                                                                │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Supported boards
 
-| Board | MCU | RAM | WiFi | Power model |
-|---|---|---|---|---|
-| Arduino Uno R4 WiFi | Renesas RA4M1 (Cortex-M4, 48 MHz) | 32 KB | ESP32-S3 co-processor via `WiFiS3` | Always-on, polling loop |
-| ESP32 DevKit | Xtensa LX6, 240 MHz | 520 KB | Native, `WiFiClientSecure` | Deep sleep between fetches |
+| Board | MCU | RAM | Display | WiFi | Power model |
+|---|---|---|---|---|---|
+| Arduino Uno R4 WiFi | Renesas RA4M1 (Cortex-M4, 48 MHz) | 32 KB | SSD1306 128×64 OLED (external, I2C) | ESP32-S3 co-processor via `WiFiS3` | Always-on, polling loop every 60 s |
+| ESP32 DevKit | Xtensa LX6, 240 MHz | 520 KB | SSD1306 128×64 OLED (external, I2C) | Native, `WiFiClientSecure` | Deep sleep 5 min between fetches |
+| Waveshare ESP32-C6 Touch LCD 1.47 | ESP32-C6 (RISC-V, 160 MHz) | 512 KB | 172×320 IPS TFT, ST7789, integrated | Native WiFi 6, `WiFiClientSecure` | Deep sleep 5 min between fetches |
 
-Both use the same `Preferences` API for NVS token storage and the same U8g2 OLED driver.
+All boards use the `Preferences` API for NVS token storage. The Uno R4 and ESP32 DevKit use U8g2 for the OLED; the Waveshare uses LovyanGFX for the integrated TFT.
 
 ---
 
@@ -384,9 +479,11 @@ Both use the same `Preferences` API for NVS token storage and the same U8g2 OLED
 ### Prerequisites
 
 1. PlatformIO — either the VS Code extension or the CLI (`pip install platformio`).
-2. An **Arduino Uno R4 WiFi** or **ESP32 DevKit** (or compatible).
-3. SSD1306 128×64 OLED display (I2C).
-4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
+2. One of the supported boards:
+   - **Arduino Uno R4 WiFi** + SSD1306 128×64 OLED (external, I2C)
+   - **ESP32 DevKit** + SSD1306 128×64 OLED (external, I2C)
+   - **Waveshare ESP32-C6 Touch LCD 1.47** (integrated display, nothing extra needed)
+3. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
 
 ### File structure
 
@@ -394,13 +491,18 @@ After cloning, your local project should look like this before building:
 
 ```
 netatmo-weather-api/
+├── boards/
+│   └── waveshare_esp32c6_lcd.json      ← custom board definition for PlatformIO
 ├── include/
 │   ├── uno_r4_wifi/
-│   │   └── arduino_secrets.h   ← you create this for Uno R4 (gitignored)
-│   └── esp32dev/
-│       └── arduino_secrets.h   ← you create this for ESP32 (gitignored)
+│   │   └── arduino_secrets.h           ← you create this for Uno R4 (gitignored)
+│   ├── esp32dev/
+│   │   └── arduino_secrets.h           ← you create this for ESP32 DevKit (gitignored)
+│   └── esp32c6_waveshare_lcd/
+│       ├── LGFX_config.h               ← LovyanGFX pin / panel configuration
+│       └── arduino_secrets.h           ← you create this for Waveshare (gitignored)
 ├── scripts/
-│   └── version.py              ← injects git commit hash at build time
+│   └── version.py                      ← injects git commit hash at build time
 ├── src/
 │   └── main.cpp
 ├── enclosure/
@@ -431,7 +533,15 @@ The city name is pulled automatically from the Netatmo API and shown on the outd
 
 #### Credentials
 
-Create the secrets file for your board — `include/uno_r4_wifi/arduino_secrets.h` or `include/esp32dev/arduino_secrets.h` — with your credentials:
+Create the secrets file for your board in the matching include directory:
+
+| Board | Path |
+|---|---|
+| Arduino Uno R4 WiFi | `include/uno_r4_wifi/arduino_secrets.h` |
+| ESP32 DevKit | `include/esp32dev/arduino_secrets.h` |
+| Waveshare ESP32-C6 | `include/esp32c6_waveshare_lcd/arduino_secrets.h` |
+
+All three files use the same format:
 
 ```cpp
 #define SECRET_SSID       "YourWiFiSSID"
@@ -487,15 +597,17 @@ Then from the project root:
 
 ```bash
 # Compile only
-pio run -e uno_r4_wifi   # Arduino Uno R4 WiFi
-pio run -e esp32dev      # ESP32 DevKit
+pio run -e uno_r4_wifi            # Arduino Uno R4 WiFi
+pio run -e esp32dev               # ESP32 DevKit
+pio run -e esp32c6_waveshare_lcd  # Waveshare ESP32-C6 Touch LCD 1.47
 
 # Compile and flash to the connected board
-pio run -e uno_r4_wifi --target upload
-pio run -e esp32dev    --target upload
+pio run -e uno_r4_wifi            --target upload
+pio run -e esp32dev               --target upload
+pio run -e esp32c6_waveshare_lcd  --target upload
 ```
 
-The first build downloads all required toolchains and libraries automatically (~500 MB, one-time). Subsequent builds are incremental and take a few seconds.
+The first build for each environment downloads the required toolchain and libraries automatically. The Waveshare build uses the pioarduino platform which includes arduino-esp32 3.x (~300 MB extra, one-time download).
 
 ---
 
@@ -504,8 +616,9 @@ The first build downloads all required toolchains and libraries automatically (~
 The board prints boot diagnostics and runtime status over USB serial at 115200 baud. To read it:
 
 ```bash
-pio device monitor -e uno_r4_wifi   # Uno R4
-pio device monitor -e esp32dev      # ESP32
+pio device monitor -e uno_r4_wifi            # Uno R4
+pio device monitor -e esp32dev               # ESP32 DevKit
+pio device monitor -e esp32c6_waveshare_lcd  # Waveshare ESP32-C6
 ```
 
 PlatformIO auto-detects the port. Press **Ctrl-C** to exit. You can also use any serial terminal (e.g. `screen`, `minicom`, PuTTY) pointed at the same port and baud rate:
@@ -538,9 +651,9 @@ Open the project folder with the PlatformIO extension installed and use the Uplo
 
 ---
 
-## Power saving (ESP32)
+## Power saving (ESP32 DevKit · Waveshare ESP32-C6)
 
-On ESP32 the firmware uses deep sleep instead of a continuous polling loop. `setup()` runs the full fetch-and-display cycle, then puts the chip to sleep for 5 minutes. `loop()` is compiled away and never runs.
+On both ESP32 platforms the firmware uses deep sleep instead of a continuous polling loop. `setup()` runs the full fetch-and-display cycle, then puts the chip to sleep for 5 minutes. `loop()` is compiled away and never runs.
 
 ### Wake cycle
 
@@ -553,9 +666,9 @@ flowchart TD
     D --> E
     E --> F[Refresh OAuth token]
     F --> G[Fetch weather data]
-    G --> H[Draw card on OLED]
+    G --> H[Draw card on display\nOLED or TFT]
     H --> I[Advance card index in RTC memory]
-    I --> J[Blank OLED — setPowerSave 1]
+    I --> J[Blank display\nOLED: setPowerSave / TFT: backlight off]
     J --> K[WiFi off]
     K --> L[Deep sleep 5 min]
     L --> A
@@ -611,11 +724,11 @@ git checkout -b restore-v1.0 f240fd0
 ## Features
 
 - **Live Netatmo data** — indoor temperature and humidity, outdoor temperature, air pressure, and rain totals (1 h and 24 h) fetched from the Netatmo Cloud API over HTTPS
-- **3-card OLED display** — indoor, outdoor, and rain cards rotate every 5 seconds on a 128×64 SSD1306
+- **3-card display** — indoor, outdoor, and rain cards rotate on every board; SSD1306 rotates every 5 s (Uno R4), TFT shows one card per wake cycle (ESP32/C6)
 - **Multi-locale with unit conversion** — Svenska, English US, English UK, Français; automatically converts °C→°F, hPa→inHg, mm→in for en-US
-- **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button at wake on ESP32)
-- **Dual-board support** — Arduino Uno R4 WiFi (always-on polling loop) and ESP32 DevKit (deep sleep, ~3 mA average)
-- **ESP32 deep sleep** — chip sleeps 5 minutes between fetches; OLED is blanked during sleep; card rotation and locale selection persist across sleep cycles via RTC memory
+- **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button at wake on ESP32 DevKit and Waveshare ESP32-C6)
+- **Three-board support** — Arduino Uno R4 WiFi (always-on polling), ESP32 DevKit (deep sleep + SSD1306), Waveshare ESP32-C6 Touch LCD 1.47 (deep sleep + integrated 172×320 IPS TFT)
+- **Deep sleep (ESP32 platforms)** — chip sleeps 5 minutes between fetches; display is blanked during sleep; card rotation and locale selection persist across sleep cycles via RTC memory; average current under 3 mA
 - **OAuth2 token refresh** — tokens are refreshed every cycle and written to wear-levelled NVS flash, so the device never loses API access across reboots or power cuts
 - **TLS with pinned CA** — all API calls are verified against the DigiCert Global Root G2 certificate
 - **Boot splash** — shows app version, build date, and git commit hash on startup

@@ -4,13 +4,11 @@
 #include <Preferences.h>
 
 // ── Platform selection ────────────────────────────────────────────────────────
-// WAVESHARE_ESP32C6_LCD  — Waveshare ESP32-C6 Touch LCD 1.47 (TFT SPI, deep sleep)
-// ESP32                  — generic ESP32 DevKit + external SSD1306 (I2C, deep sleep)
-// (neither)              — Arduino Uno R4 WiFi + external SSD1306 (I2C, polling loop)
-
-#if defined(WAVESHARE_ESP32C6_LCD) || defined(ESP32)
-#  define DEEP_SLEEP_PLATFORM 1
-#endif
+// WAVESHARE_ESP32C6_LCD  — Waveshare ESP32-C6 Touch LCD 1.47 (integrated TFT)
+// ESP32                  — generic ESP32 DevKit + external SSD1306 (I2C)
+// (neither)              — Arduino Uno R4 WiFi + external SSD1306 (I2C)
+// All three boards use a continuous polling loop. ESP32 platforms fetch every
+// 5 minutes; Uno R4 fetches every 60 seconds.
 
 #ifdef WAVESHARE_ESP32C6_LCD
 #  include "LGFX_config.h"
@@ -98,11 +96,7 @@ static const Locale L_FR_FR = {
 // Cycle order: sv-SE → en-US → en-GB → fr-FR → sv-SE …
 static const Locale* const locales[] = { &L_SV_SE, &L_EN_US, &L_EN_GB, &L_FR_FR };
 static const uint8_t LOCALE_COUNT = 4;
-#ifdef DEEP_SLEEP_PLATFORM
-RTC_DATA_ATTR uint8_t g_localeIndex = 0;
-#else
-static uint8_t        g_localeIndex = 0;
-#endif
+static uint8_t       g_localeIndex = 0;
 static const Locale* g_loc = locales[0];  // synced from g_localeIndex at top of setup()
 
 inline float toDisplayTemp(float c)     { return g_loc->fahrenheit ? c * 9.0f / 5.0f + 32.0f : c; }
@@ -190,15 +184,14 @@ bool   g_hasData        = false;
 String g_city           = "";
 
 // ── Display card rotation ─────────────────────────────────────────────────────
-#ifdef DEEP_SLEEP_PLATFORM
-RTC_DATA_ATTR uint8_t g_card = 0;          // survives deep sleep
-const unsigned long   FETCH_MS = 300000;   // sleep duration (5 min)
-#else
 uint8_t       g_card           = 0;
 unsigned long g_lastCardSwitch = 0;
 unsigned long g_lastFetch      = 0;
-const unsigned long CARD_MS    = 5000;
-const unsigned long FETCH_MS   = 60000;
+const unsigned long CARD_MS  = 5000;
+#ifdef ESP32
+const unsigned long FETCH_MS = 300000;  // 5 min — Netatmo station updates every 5 min
+#else
+const unsigned long FETCH_MS = 60000;   // 1 min — Uno R4
 #endif
 
 // ── Forward declarations ──────────────────────────────────────────────────────
@@ -231,27 +224,15 @@ void setup()
   tft.setRotation(1);   // landscape: 320 × 172
   tft.fillScreen(TFT_BLACK);
 
-  // Button checked after display init so showLocale() can render immediately.
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
-    g_loc = locales[g_localeIndex];
-    Serial.print("Locale: "); Serial.println(g_loc->code);
-    showLocale();
-  }
-
-  // Splash only on cold boot, not on every 5-min wake.
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextFont(2);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawString("Netatmo Weather", 4, 30);
-    tft.drawString("v" APP_VERSION, 4, 65);
-    tft.drawString(__DATE__, 4, 100);
-    tft.drawString(GIT_COMMIT, 4, 135);
-    delay(5000);
-    tft.fillScreen(TFT_BLACK);
-  }
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Netatmo Weather", 4, 30);
+  tft.drawString("v" APP_VERSION, 4, 65);
+  tft.drawString(__DATE__, 4, 100);
+  tft.drawString(GIT_COMMIT, 4, 135);
+  delay(5000);
+  tft.fillScreen(TFT_BLACK);
 
 // ── SSD1306 OLED init (ESP32 devkit + Uno R4) ────────────────────────────────
 #else
@@ -275,39 +256,26 @@ void setup()
   Serial.println(oledOk ? "true (OK)" : "false (FAILED)");
 
   if (oledOk) {
-#  ifdef ESP32
-    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED)
-#  endif
-    {
-      oled.clearBuffer();
-      oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(0, 12, "Netatmo Weather");
-      oled.drawStr(0, 28, "v" APP_VERSION);
-      oled.drawStr(0, 44, __DATE__);
-      oled.drawStr(0, 60, GIT_COMMIT);
-      oled.sendBuffer();
-      delay(5000);
-    }
+    oled.clearBuffer();
+    oled.setFont(u8g2_font_ncenB08_tr);
+    oled.drawStr(0, 12, "Netatmo Weather");
+    oled.drawStr(0, 28, "v" APP_VERSION);
+    oled.drawStr(0, 44, __DATE__);
+    oled.drawStr(0, 60, GIT_COMMIT);
+    oled.sendBuffer();
+    delay(5000);
   } else {
     Serial.println("OLED init failed — skipping draw");
   }
 
-#  ifdef ESP32
-  // Button checked silently; new locale shows on the next drawCard().
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
-    g_loc = locales[g_localeIndex];
-    Serial.print("Locale: "); Serial.println(g_loc->code);
-  }
-#  endif
-
 #endif  // display init
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   loadTokens();
   Serial.println("Starting...");
 
-#ifndef DEEP_SLEEP_PLATFORM
+#ifndef ESP32
   // Uno R4: verify the WiFi co-processor is present.
   if (WiFi.status() == WL_NO_MODULE) {
     Serial.println("WiFi module not found!");
@@ -333,7 +301,7 @@ void setup()
 #endif
 
   // WiFi connect loop — ESP32/C6 polls status, Uno R4 relies on begin() return value.
-#ifdef DEEP_SLEEP_PLATFORM
+#ifdef ESP32
   WiFi.begin(ssid, pass);
   uint8_t wifiAttempts = 0;
   while (WiFi.status() != WL_CONNECTED) {
@@ -361,24 +329,8 @@ void setup()
   if (client.connect(server, 443)) fetchWeatherData();
   else { Serial.println("Connection failed (weather fetch)"); showError(g_loc->api_unreachable, "Weather fetch"); }
 
-  // ── Platform-specific teardown / sleep ────────────────────────────────────
-#ifdef DEEP_SLEEP_PLATFORM
-  g_card = (g_card + 1) % 3;          // advance for next wake
-
-  // Display intentionally left on — both SSD1306 and ST7789 retain their
-  // frame buffer during deep sleep, so the last card stays visible.
-
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  esp_sleep_enable_timer_wakeup((uint64_t)FETCH_MS * 1000ULL);
-  Serial.printf("Sleeping %lu s\n", FETCH_MS / 1000UL);
-  Serial.flush();
-  esp_deep_sleep_start();
-  // never returns
-#else
   g_lastFetch      = millis();
   g_lastCardSwitch = millis();
-#endif
 }
 
 // ── showLocale() ──────────────────────────────────────────────────────────────
@@ -414,8 +366,6 @@ void showLocale()
 // ── loop() ────────────────────────────────────────────────────────────────────
 void loop()
 {
-#ifndef DEEP_SLEEP_PLATFORM
-  // Uno R4 only — ESP32 platforms never reach loop() (deep sleep resets the chip).
   unsigned long now = millis();
 
   static unsigned long lastPress = 0;
@@ -446,7 +396,6 @@ void loop()
   }
 
   delay(100);
-#endif
 }
 
 // ── Shared networking helpers ─────────────────────────────────────────────────

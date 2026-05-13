@@ -1,20 +1,34 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "arduino_secrets.h"
-#include <U8g2lib.h>
-#include <Wire.h>
-#ifdef ESP32
-#  include <WiFi.h>
-#  include <WiFiClientSecure.h>
-#else
-#  include "WiFiS3.h"
-#  include "WiFiSSLClient.h"
-#endif
 #include <Preferences.h>
 
-#ifdef ESP32
+// ── Platform selection ────────────────────────────────────────────────────────
+// WAVESHARE_ESP32C6_LCD  — Waveshare ESP32-C6 Touch LCD 1.47 (TFT SPI, deep sleep)
+// ESP32                  — generic ESP32 DevKit + external SSD1306 (I2C, deep sleep)
+// (neither)              — Arduino Uno R4 WiFi + external SSD1306 (I2C, polling loop)
+
+#if defined(WAVESHARE_ESP32C6_LCD) || defined(ESP32)
+#  define DEEP_SLEEP_PLATFORM 1
+#endif
+
+#ifdef WAVESHARE_ESP32C6_LCD
+#  include "LGFX_config.h"
+#  include <LGFX_TFT_eSPI.hpp>
+#  include <WiFi.h>
+#  include <WiFiClientSecure.h>
+#  define BUTTON_PIN 9   // BOOT button on ESP32-C6
+#elif defined(ESP32)
+#  include <U8g2lib.h>
+#  include <Wire.h>
+#  include <WiFi.h>
+#  include <WiFiClientSecure.h>
 #  define BUTTON_PIN 0   // BOOT button on most ESP32 devkit boards
 #else
+#  include <U8g2lib.h>
+#  include <Wire.h>
+#  include "WiFiS3.h"
+#  include "WiFiSSLClient.h"
 #  define BUTTON_PIN 7
 #endif
 
@@ -84,13 +98,12 @@ static const Locale L_FR_FR = {
 // Cycle order: sv-SE → en-US → en-GB → fr-FR → sv-SE …
 static const Locale* const locales[] = { &L_SV_SE, &L_EN_US, &L_EN_GB, &L_FR_FR };
 static const uint8_t LOCALE_COUNT = 4;
-// On ESP32, g_localeIndex lives in RTC memory so it survives deep sleep.
-#ifdef ESP32
+#ifdef DEEP_SLEEP_PLATFORM
 RTC_DATA_ATTR uint8_t g_localeIndex = 0;
 #else
 static uint8_t        g_localeIndex = 0;
 #endif
-static const Locale* g_loc = locales[0];  // synced from g_localeIndex at the top of setup()
+static const Locale* g_loc = locales[0];  // synced from g_localeIndex at top of setup()
 
 inline float toDisplayTemp(float c)     { return g_loc->fahrenheit ? c * 9.0f / 5.0f + 32.0f : c; }
 inline float toDisplayPressure(float h) { return g_loc->inhg       ? h * 0.02953f              : h; }
@@ -105,15 +118,25 @@ char pass[] = SECRET_PASS;
 int status = WL_IDLE_STATUS;
 const char* server = "api.netatmo.com";
 
-// Cap HTTP responses to prevent RAM exhaustion on the 32KB RA4M1
+// Cap HTTP responses to prevent RAM exhaustion on the 32 KB RA4M1
 const size_t MAX_RESPONSE_SIZE = 8192;
 
+// ── Display objects ───────────────────────────────────────────────────────────
+#ifdef WAVESHARE_ESP32C6_LCD
+TFT_eSPI tft;
+// Card header colours: indoor (warm amber), outdoor (sky blue), rain (teal)
+static const uint16_t CARD_COLOR[] = { 0xFB60, 0x235F, 0x03DF };
+#else
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
-#ifdef ESP32
+#endif
+
+// ── WiFi client ───────────────────────────────────────────────────────────────
+#if defined(WAVESHARE_ESP32C6_LCD) || defined(ESP32)
 WiFiClientSecure client;
 #else
 WiFiSSLClient    client;
 #endif
+
 Preferences prefs;
 
 // DigiCert Global Root G2 — CN: DigiCert Global Root G2, expires 2038-01-15
@@ -141,7 +164,8 @@ const char* netatmo_ca =
     "MrY=\n"
     "-----END CERTIFICATE-----\n";
 
-// 8×8 filled water-drop icon (XBM format: bit 0 = leftmost pixel per row)
+// 8×8 filled water-drop icon — only needed for U8g2 (XBM format)
+#ifndef WAVESHARE_ESP32C6_LCD
 static const uint8_t rain_drop_bmp[] PROGMEM = {
     0x18,  // ...XX...
     0x3C,  // ..XXXX..
@@ -152,6 +176,7 @@ static const uint8_t rain_drop_bmp[] PROGMEM = {
     0x3C,  // ..XXXX..
     0x18,  // ...XX...
 };
+#endif
 
 // ── Weather data (updated each fetch) ────────────────────────────────────────
 float  g_indoorTemp     = 0;
@@ -165,10 +190,9 @@ bool   g_hasData        = false;
 String g_city           = "";
 
 // ── Display card rotation ─────────────────────────────────────────────────────
-// On ESP32, g_card lives in RTC memory so the display rotates across deep-sleep cycles.
-#ifdef ESP32
-RTC_DATA_ATTR uint8_t g_card = 0;
-const unsigned long   FETCH_MS = 300000;   // sleep duration between wakes (5 min)
+#ifdef DEEP_SLEEP_PLATFORM
+RTC_DATA_ATTR uint8_t g_card = 0;          // survives deep sleep
+const unsigned long   FETCH_MS = 300000;   // sleep duration (5 min)
 #else
 uint8_t       g_card           = 0;
 unsigned long g_lastCardSwitch = 0;
@@ -177,47 +201,66 @@ const unsigned long CARD_MS    = 5000;
 const unsigned long FETCH_MS   = 60000;
 #endif
 
+// ── Forward declarations ──────────────────────────────────────────────────────
 void loadTokens();
 void saveTokens();
 void fetchWeatherData();
 void drawCard(uint8_t card);
 void showError(const char* title, const char* detail = nullptr);
+void showLocale();
 void refreshAccessToken();
 String readHttpResponse();
 
+// ── setup() ───────────────────────────────────────────────────────────────────
 void setup()
 {
   // Restore locale pointer from the RTC-persistent index on every boot/wake.
   g_loc = locales[g_localeIndex];
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-
   Serial.begin(115200);
-  // Timeout after 3s so the device boots standalone without a serial monitor connected
   unsigned long serialDeadline = millis() + 3000;
   while (!Serial && millis() < serialDeadline) { ; }
-
   Serial.println("=== Boot ===");
   Serial.println("Serial OK");
 
-#ifdef ESP32
-  // On ESP32, loop() never runs (deep sleep resets the chip each cycle).
-  // The button is therefore sampled once at wake time to cycle locale.
+// ── Waveshare ESP32-C6 LCD init ───────────────────────────────────────────────
+#ifdef WAVESHARE_ESP32C6_LCD
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  tft.init();
+  tft.setRotation(1);   // landscape: 320 × 172
+  tft.fillScreen(TFT_BLACK);
+
+  // Button checked after display init so showLocale() can render immediately.
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   if (digitalRead(BUTTON_PIN) == LOW) {
     g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
     g_loc = locales[g_localeIndex];
     Serial.print("Locale: "); Serial.println(g_loc->code);
+    showLocale();
   }
-#endif
 
-  // I2C scan — find what addresses are actually present on the bus
+  // Splash only on cold boot, not on every 5-min wake.
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextFont(2);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("Netatmo Weather", 4, 30);
+    tft.drawString("v" APP_VERSION, 4, 65);
+    tft.drawString(__DATE__, 4, 100);
+    tft.drawString(GIT_COMMIT, 4, 135);
+    delay(5000);
+    tft.fillScreen(TFT_BLACK);
+  }
+
+// ── SSD1306 OLED init (ESP32 devkit + Uno R4) ────────────────────────────────
+#else
   Wire.begin();
   Serial.println("I2C scan:");
   uint8_t found = 0;
   for (uint8_t addr = 1; addr < 127; addr++) {
     Wire.beginTransmission(addr);
-    uint8_t err = Wire.endTransmission();
-    if (err == 0) {
+    if (Wire.endTransmission() == 0) {
       Serial.print("  Device at 0x");
       if (addr < 16) Serial.print("0");
       Serial.println(addr, HEX);
@@ -232,10 +275,9 @@ void setup()
   Serial.println(oledOk ? "true (OK)" : "false (FAILED)");
 
   if (oledOk) {
-    // On ESP32, skip the splash on every deep-sleep wake; show only on cold boot.
-#ifdef ESP32
+#  ifdef ESP32
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED)
-#endif
+#  endif
     {
       oled.clearBuffer();
       oled.setFont(u8g2_font_ncenB08_tr);
@@ -250,39 +292,58 @@ void setup()
     Serial.println("OLED init failed — skipping draw");
   }
 
+#  ifdef ESP32
+  // Button checked silently; new locale shows on the next drawCard().
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
+    g_loc = locales[g_localeIndex];
+    Serial.print("Locale: "); Serial.println(g_loc->code);
+  }
+#  endif
+
+#endif  // display init
+
   loadTokens();
   Serial.println("Starting...");
 
-#ifndef ESP32
-  if (WiFi.status() == WL_NO_MODULE)
-  {
+#ifndef DEEP_SLEEP_PLATFORM
+  // Uno R4: verify the WiFi co-processor is present.
+  if (WiFi.status() == WL_NO_MODULE) {
     Serial.println("WiFi module not found!");
     while (true) ;
   }
-
   if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION)
     Serial.println("WiFi firmware update available");
 #endif
 
+  // Show "connecting" on whichever display is active.
+#ifdef WAVESHARE_ESP32C6_LCD
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(g_loc->connecting, 4, 60);
+  tft.drawString(ssid, 4, 90);
+#else
   oled.setFont(u8g2_font_ncenB08_tr);
   oled.clearBuffer();
   oled.drawStr(0, 20, g_loc->connecting);
   oled.drawStr(0, 34, ssid);
   oled.sendBuffer();
+#endif
 
-#ifdef ESP32
+  // WiFi connect loop — ESP32/C6 polls status, Uno R4 relies on begin() return value.
+#ifdef DEEP_SLEEP_PLATFORM
   WiFi.begin(ssid, pass);
   uint8_t wifiAttempts = 0;
-  while (WiFi.status() != WL_CONNECTED)
-  {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     if (++wifiAttempts >= 60)
       { showError(g_loc->wifi_failed, g_loc->check_creds); break; }
   }
 #else
   uint8_t wifiAttempts = 0;
-  while (status != WL_CONNECTED)
-  {
+  while (status != WL_CONNECTED) {
     Serial.print("Connecting to: ");
     Serial.println(ssid);
     status = WiFi.begin(ssid, pass);
@@ -300,30 +361,67 @@ void setup()
   if (client.connect(server, 443)) fetchWeatherData();
   else { Serial.println("Connection failed (weather fetch)"); showError(g_loc->api_unreachable, "Weather fetch"); }
 
-#ifdef ESP32
-  // Advance card index for the next wake, then blank the display and sleep.
-  g_card = (g_card + 1) % 3;
-  oled.setPowerSave(1);
+  // ── Platform-specific teardown / sleep ────────────────────────────────────
+#ifdef DEEP_SLEEP_PLATFORM
+  g_card = (g_card + 1) % 3;          // advance for next wake
+
+#  ifdef WAVESHARE_ESP32C6_LCD
+  tft.fillScreen(TFT_BLACK);
+  digitalWrite(TFT_BL, LOW);          // backlight off
+#  else
+  oled.setPowerSave(1);               // OLED off
+#  endif
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   esp_sleep_enable_timer_wakeup((uint64_t)FETCH_MS * 1000ULL);
   Serial.printf("Sleeping %lu s\n", FETCH_MS / 1000UL);
   Serial.flush();
   esp_deep_sleep_start();
+  // never returns
 #else
   g_lastFetch      = millis();
   g_lastCardSwitch = millis();
 #endif
 }
 
-void showLocale();
+// ── showLocale() ──────────────────────────────────────────────────────────────
+void showLocale()
+{
+#ifdef WAVESHARE_ESP32C6_LCD
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawString("Language:", 4, 30);
+  tft.setTextFont(4);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(g_loc->name, 4, 70);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawString(g_loc->code, 4, 118);
+  delay(1500);
+  tft.fillScreen(TFT_BLACK);
+#else
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.drawStr(0, 12, "Language:");
+  oled.setFont(u8g2_font_logisoso16_tr);
+  oled.drawStr(0, 38, g_loc->name);
+  oled.setFont(u8g2_font_ncenB08_tr);
+  oled.drawStr(0, 54, g_loc->code);
+  oled.sendBuffer();
+  delay(1500);
+#endif
+}
 
+// ── loop() ────────────────────────────────────────────────────────────────────
 void loop()
 {
-#ifndef ESP32
+#ifndef DEEP_SLEEP_PLATFORM
+  // Uno R4 only — ESP32 platforms never reach loop() (deep sleep resets the chip).
   unsigned long now = millis();
 
-  // Button: cycle locale on press (debounced 300 ms)
   static unsigned long lastPress = 0;
   if (digitalRead(BUTTON_PIN) == LOW && now - lastPress > 300)
   {
@@ -355,25 +453,13 @@ void loop()
 #endif
 }
 
-void showLocale()
-{
-  oled.clearBuffer();
-  oled.setFont(u8g2_font_ncenB08_tr);
-  oled.drawStr(0, 12, "Language:");
-  oled.setFont(u8g2_font_logisoso16_tr);
-  oled.drawStr(0, 38, g_loc->name);
-  oled.setFont(u8g2_font_ncenB08_tr);
-  oled.drawStr(0, 54, g_loc->code);
-  oled.sendBuffer();
-  delay(1500);
-}
+// ── Shared networking helpers ─────────────────────────────────────────────────
 
 // Reads the full HTTP response, checks for 200 OK, strips headers,
 // and returns the JSON body. Returns empty string on any error.
 // Capped at MAX_RESPONSE_SIZE to prevent RAM exhaustion.
 String readHttpResponse()
 {
-  // Wait up to 5s for the first byte
   unsigned long timeout = millis() + 5000;
   while (!client.available() && millis() < timeout) { delay(10); }
 
@@ -386,9 +472,7 @@ String readHttpResponse()
 
   String response = "";
   while (client.available() && response.length() < MAX_RESPONSE_SIZE)
-  {
     response += (char)client.read();
-  }
   client.stop();
 
   if (!response.startsWith("HTTP") || response.indexOf(" 200 ") == -1)
@@ -399,12 +483,7 @@ String readHttpResponse()
   }
 
   int jsonStart = response.indexOf('{');
-  if (jsonStart == -1)
-  {
-    Serial.println("No JSON found in response");
-    return "";
-  }
-
+  if (jsonStart == -1) { Serial.println("No JSON found"); return ""; }
   return response.substring(jsonStart);
 }
 
@@ -440,12 +519,7 @@ void fetchWeatherData()
 
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, json);
-  if (error)
-  {
-    Serial.print("JSON parse failed: ");
-    Serial.println(error.c_str());
-    return;
-  }
+  if (error) { Serial.print("JSON parse failed: "); Serial.println(error.c_str()); return; }
 
   const char* city = doc["body"]["devices"][0]["place"]["city"];
   if (city) g_city = String(city);
@@ -453,10 +527,8 @@ void fetchWeatherData()
   JsonObject indoor  = doc["body"]["devices"][0]["dashboard_data"];
   JsonArray  modules = doc["body"]["devices"][0]["modules"];
 
-  JsonObject outdoor;
-  JsonObject rainData;
-  for (JsonObject mod : modules)
-  {
+  JsonObject outdoor, rainData;
+  for (JsonObject mod : modules) {
     const char* type = mod["type"];
     if (!type) continue;
     if (strcmp(type, "NAModule1") == 0) outdoor  = mod["dashboard_data"];
@@ -472,37 +544,165 @@ void fetchWeatherData()
   g_isRaining      = (rainData["Rain"]       | 0.0f) > 0.0f;
   g_hasData        = true;
 
-  Serial.print("City: ");           Serial.println(g_city);
-  Serial.print("Indoor Temp: ");    Serial.println(g_indoorTemp);
-  Serial.print("Indoor Humidity: ");Serial.println(g_indoorHumidity);
-  Serial.print("Air Pressure: ");   Serial.println(g_airPressure);
-  Serial.print("Outdoor Temp: ");   Serial.println(g_outdoorTemp);
-  Serial.print("Rain 1h: ");        Serial.println(g_rain1h);
-  Serial.print("Rain 24h: ");       Serial.println(g_rain24h);
+  Serial.print("City: ");            Serial.println(g_city);
+  Serial.print("Indoor Temp: ");     Serial.println(g_indoorTemp);
+  Serial.print("Indoor Humidity: "); Serial.println(g_indoorHumidity);
+  Serial.print("Air Pressure: ");    Serial.println(g_airPressure);
+  Serial.print("Outdoor Temp: ");    Serial.println(g_outdoorTemp);
+  Serial.print("Rain 1h: ");         Serial.println(g_rain1h);
+  Serial.print("Rain 24h: ");        Serial.println(g_rain24h);
 
   drawCard(g_card);
 }
 
+void refreshAccessToken()
+{
+  String postData = "grant_type=refresh_token&refresh_token=" + refreshToken +
+                    "&client_id="     + String(CLIENT_ID) +
+                    "&client_secret=" + String(CLIENT_SECRET);
+
+  client.println("POST /oauth2/token HTTP/1.1");
+  client.println("Host: api.netatmo.com");
+  client.println("Content-Type: application/x-www-form-urlencoded");
+  client.print("Content-Length: "); client.println(postData.length());
+  client.println("Connection: close");
+  client.println();
+  client.println(postData);
+
+  String json = readHttpResponse();
+  if (json.isEmpty()) return;
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, json);
+  if (error) { Serial.print("JSON parse failed: "); Serial.println(error.c_str()); return; }
+
+  const char* newAccessToken  = doc["access_token"];
+  const char* newRefreshToken = doc["refresh_token"];
+
+  if (newAccessToken && newRefreshToken) {
+    accessToken  = String(newAccessToken);
+    refreshToken = String(newRefreshToken);
+    Serial.println("Tokens refreshed successfully");
+    saveTokens();
+  } else {
+    Serial.print("Token refresh failed: ");
+    Serial.println(doc["error"] | "unknown error");
+    showError(g_loc->token_expired, g_loc->reflash);
+  }
+}
+
+// ── showError() ───────────────────────────────────────────────────────────────
 void showError(const char* title, const char* detail)
 {
+#ifdef WAVESHARE_ESP32C6_LCD
+  tft.fillScreen(0x4000);   // dark red
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(4);
+  tft.setTextColor(TFT_WHITE, 0x4000);
+  tft.drawString("ERROR", 4, 20);
+  tft.setTextFont(2);
+  tft.drawString(title, 4, 65);
+  if (detail) tft.drawString(detail, 4, 95);
+  tft.drawString(g_loc->retrying, 4, 135);
+#else
   oled.clearBuffer();
   oled.setFont(u8g2_font_open_iconic_embedded_2x_t);
-  oled.drawGlyph(0, 16, 71); // exclamation / alert icon
+  oled.drawGlyph(0, 16, 71); // alert icon
   oled.setFont(u8g2_font_ncenB08_tr);
   oled.drawStr(20, 12, "ERROR");
   oled.drawStr(0, 30, title);
-  if (detail)
-    oled.drawStr(0, 44, detail);
+  if (detail) oled.drawStr(0, 44, detail);
   oled.drawStr(0, 58, g_loc->retrying);
   oled.sendBuffer();
+#endif
 }
 
-// Card 0: indoor temp + humidity     (sun icon)
-// Card 1: outdoor temp + pressure    (cloud icon) — city name as title if known
-// Card 2: rain 1h + 24h             (rain icon)
-//
+// ── drawCard() ────────────────────────────────────────────────────────────────
+// Card 0: indoor temp + humidity
+// Card 1: outdoor temp + pressure  (city name as title if known)
+// Card 2: rain 1h + 24h
+
+#ifdef WAVESHARE_ESP32C6_LCD
+// ── TFT layout (landscape 320 × 172) ─────────────────────────────────────────
+// y=0..27   coloured header bar — card title left, locale code right
+// y=35..82  main value: Font 6 (48 px, digits only) + Font 4 unit suffix
+// y=138..   secondary label (Font 2)
+
+void drawCard(uint8_t card)
+{
+  tft.fillScreen(TFT_BLACK);
+
+  uint16_t hdrColor = CARD_COLOR[card];
+  tft.fillRect(0, 0, tft.width(), 28, hdrColor);
+
+  // Header text
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextFont(2);
+  tft.setTextColor(TFT_WHITE, hdrColor);
+  const char* title = (card == 0) ? g_loc->indoor
+                    : (card == 1) ? (g_city.length() > 0 ? g_city.c_str() : g_loc->outdoor)
+                    :               g_loc->rain;
+  tft.drawString(title, 4, 6);
+
+  tft.setTextDatum(TR_DATUM);
+  tft.drawString(g_loc->code, tft.width() - 4, 6);
+  tft.setTextDatum(TL_DATUM);
+
+  // Card-specific content
+  switch (card)
+  {
+    case 0:
+    case 1: {
+      float    temp    = (card == 0) ? g_indoorTemp : g_outdoorTemp;
+      String   numStr  = String(toDisplayTemp(temp), 1);
+      String   unitStr = String(g_loc->temp_unit);
+
+      // Large digits in Font 6 (7-segment; only has 0–9, minus, decimal)
+      tft.setTextFont(6);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawString(numStr, 10, 38);
+      int numW = tft.textWidth(numStr);
+
+      // Unit letter in Font 4 (full char set) immediately to the right
+      tft.setTextFont(4);
+      tft.drawString(unitStr, 14 + numW, 50);
+
+      // Secondary line
+      tft.setTextFont(2);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      if (card == 0) {
+        tft.drawString(String(g_loc->humidity) + String(g_indoorHumidity) + "%", 10, 140);
+      } else {
+        tft.drawString(String(g_loc->pressure) +
+                       String(toDisplayPressure(g_airPressure), (unsigned int)g_loc->pressure_decimals) +
+                       g_loc->pressure_unit, 10, 140);
+      }
+      break;
+    }
+    case 2: {
+      // Rain-now dot in header
+      if (g_isRaining) {
+        tft.setTextDatum(TR_DATUM);
+        tft.setTextFont(4);
+        tft.setTextColor(TFT_WHITE, hdrColor);
+        tft.drawString("*", tft.width() - tft.textWidth(g_loc->code) - 20, 3);
+        tft.setTextDatum(TL_DATUM);
+      }
+
+      tft.setTextFont(4);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawString("1h:  " + String(toDisplayRain(g_rain1h),  (unsigned int)g_loc->rain_decimals) + " " + g_loc->rain_unit, 10, 48);
+      tft.drawString("24h: " + String(toDisplayRain(g_rain24h), (unsigned int)g_loc->rain_decimals) + " " + g_loc->rain_unit, 10, 108);
+      break;
+    }
+  }
+}
+
+#else
+// ── SSD1306 OLED layout (128 × 64) ───────────────────────────────────────────
 // Open Iconic weather 2x glyph codes (16×16 px):
-//   64 = cloud   65 = lightning   66 = moon   67 = rain   68 = star   69 = sun
+//   64 = cloud   67 = rain   69 = sun
+
 void drawCard(uint8_t card)
 {
   oled.clearBuffer();
@@ -537,7 +737,7 @@ void drawCard(uint8_t card)
       oled.setFont(u8g2_font_ncenB08_tr);
       oled.drawStr(20, 12, g_loc->rain);
       if (g_isRaining)
-        oled.drawXBMP(112, 0, 8, 8, rain_drop_bmp); // "raining now" indicator
+        oled.drawXBMP(112, 0, 8, 8, rain_drop_bmp);
       oled.setFont(u8g2_font_logisoso16_tr);
       oled.drawStr(0, 38, ("1h:  " + String(toDisplayRain(g_rain1h),  (unsigned int)g_loc->rain_decimals) + g_loc->rain_unit).c_str());
       oled.drawStr(0, 58, ("24h: " + String(toDisplayRain(g_rain24h), (unsigned int)g_loc->rain_decimals) + g_loc->rain_unit).c_str());
@@ -546,48 +746,4 @@ void drawCard(uint8_t card)
 
   oled.sendBuffer();
 }
-
-void refreshAccessToken()
-{
-  String postData = "grant_type=refresh_token&refresh_token=" + refreshToken +
-                    "&client_id="     + String(CLIENT_ID) +
-                    "&client_secret=" + String(CLIENT_SECRET);
-
-  client.println("POST /oauth2/token HTTP/1.1");
-  client.println("Host: api.netatmo.com");
-  client.println("Content-Type: application/x-www-form-urlencoded");
-  client.print("Content-Length: ");
-  client.println(postData.length());
-  client.println("Connection: close");
-  client.println();
-  client.println(postData);
-
-  String json = readHttpResponse();
-  if (json.isEmpty()) return;
-
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, json);
-  if (error)
-  {
-    Serial.print("JSON parse failed: ");
-    Serial.println(error.c_str());
-    return;
-  }
-
-  const char* newAccessToken  = doc["access_token"];
-  const char* newRefreshToken = doc["refresh_token"];
-
-  if (newAccessToken && newRefreshToken)
-  {
-    accessToken  = String(newAccessToken);
-    refreshToken = String(newRefreshToken);
-    Serial.println("Tokens refreshed successfully");
-    saveTokens();
-  }
-  else
-  {
-    Serial.print("Token refresh failed: ");
-    Serial.println(doc["error"] | "unknown error");
-    showError(g_loc->token_expired, g_loc->reflash);
-  }
-}
+#endif

@@ -3,11 +3,20 @@
 #include "arduino_secrets.h"
 #include <U8g2lib.h>
 #include <Wire.h>
-#include "WiFiS3.h"
-#include "WiFiSSLClient.h"
+#ifdef ESP32
+#  include <WiFi.h>
+#  include <WiFiClientSecure.h>
+#else
+#  include "WiFiS3.h"
+#  include "WiFiSSLClient.h"
+#endif
 #include <Preferences.h>
 
-#define BUTTON_PIN 7
+#ifdef ESP32
+#  define BUTTON_PIN 0   // BOOT button on most ESP32 devkit boards
+#else
+#  define BUTTON_PIN 7
+#endif
 
 // ── Locale ────────────────────────────────────────────────────────────────────
 struct Locale {
@@ -75,8 +84,13 @@ static const Locale L_FR_FR = {
 // Cycle order: sv-SE → en-US → en-GB → fr-FR → sv-SE …
 static const Locale* const locales[] = { &L_SV_SE, &L_EN_US, &L_EN_GB, &L_FR_FR };
 static const uint8_t LOCALE_COUNT = 4;
-static uint8_t       g_localeIndex = 0;
-static const Locale* g_loc         = locales[0];
+// On ESP32, g_localeIndex lives in RTC memory so it survives deep sleep.
+#ifdef ESP32
+RTC_DATA_ATTR uint8_t g_localeIndex = 0;
+#else
+static uint8_t        g_localeIndex = 0;
+#endif
+static const Locale* g_loc = locales[0];  // synced from g_localeIndex at the top of setup()
 
 inline float toDisplayTemp(float c)     { return g_loc->fahrenheit ? c * 9.0f / 5.0f + 32.0f : c; }
 inline float toDisplayPressure(float h) { return g_loc->inhg       ? h * 0.02953f              : h; }
@@ -95,7 +109,11 @@ const char* server = "api.netatmo.com";
 const size_t MAX_RESPONSE_SIZE = 8192;
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
-WiFiSSLClient client;
+#ifdef ESP32
+WiFiClientSecure client;
+#else
+WiFiSSLClient    client;
+#endif
 Preferences prefs;
 
 // DigiCert Global Root G2 — CN: DigiCert Global Root G2, expires 2038-01-15
@@ -147,11 +165,17 @@ bool   g_hasData        = false;
 String g_city           = "";
 
 // ── Display card rotation ─────────────────────────────────────────────────────
+// On ESP32, g_card lives in RTC memory so the display rotates across deep-sleep cycles.
+#ifdef ESP32
+RTC_DATA_ATTR uint8_t g_card = 0;
+const unsigned long   FETCH_MS = 300000;   // sleep duration between wakes (5 min)
+#else
 uint8_t       g_card           = 0;
 unsigned long g_lastCardSwitch = 0;
 unsigned long g_lastFetch      = 0;
 const unsigned long CARD_MS    = 5000;
 const unsigned long FETCH_MS   = 60000;
+#endif
 
 void loadTokens();
 void saveTokens();
@@ -163,6 +187,9 @@ String readHttpResponse();
 
 void setup()
 {
+  // Restore locale pointer from the RTC-persistent index on every boot/wake.
+  g_loc = locales[g_localeIndex];
+
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   Serial.begin(115200);
@@ -172,6 +199,16 @@ void setup()
 
   Serial.println("=== Boot ===");
   Serial.println("Serial OK");
+
+#ifdef ESP32
+  // On ESP32, loop() never runs (deep sleep resets the chip each cycle).
+  // The button is therefore sampled once at wake time to cycle locale.
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    g_localeIndex = (g_localeIndex + 1) % LOCALE_COUNT;
+    g_loc = locales[g_localeIndex];
+    Serial.print("Locale: "); Serial.println(g_loc->code);
+  }
+#endif
 
   // I2C scan — find what addresses are actually present on the bus
   Wire.begin();
@@ -195,14 +232,20 @@ void setup()
   Serial.println(oledOk ? "true (OK)" : "false (FAILED)");
 
   if (oledOk) {
-    oled.clearBuffer();
-    oled.setFont(u8g2_font_ncenB08_tr);
-    oled.drawStr(0, 12, "Netatmo Weather");
-    oled.drawStr(0, 28, "v" APP_VERSION);
-    oled.drawStr(0, 44, __DATE__);
-    oled.drawStr(0, 60, GIT_COMMIT);
-    oled.sendBuffer();
-    delay(5000);
+    // On ESP32, skip the splash on every deep-sleep wake; show only on cold boot.
+#ifdef ESP32
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED)
+#endif
+    {
+      oled.clearBuffer();
+      oled.setFont(u8g2_font_ncenB08_tr);
+      oled.drawStr(0, 12, "Netatmo Weather");
+      oled.drawStr(0, 28, "v" APP_VERSION);
+      oled.drawStr(0, 44, __DATE__);
+      oled.drawStr(0, 60, GIT_COMMIT);
+      oled.sendBuffer();
+      delay(5000);
+    }
   } else {
     Serial.println("OLED init failed — skipping draw");
   }
@@ -210,6 +253,7 @@ void setup()
   loadTokens();
   Serial.println("Starting...");
 
+#ifndef ESP32
   if (WiFi.status() == WL_NO_MODULE)
   {
     Serial.println("WiFi module not found!");
@@ -218,6 +262,7 @@ void setup()
 
   if (WiFi.firmwareVersion() < WIFI_FIRMWARE_LATEST_VERSION)
     Serial.println("WiFi firmware update available");
+#endif
 
   oled.setFont(u8g2_font_ncenB08_tr);
   oled.clearBuffer();
@@ -225,6 +270,16 @@ void setup()
   oled.drawStr(0, 34, ssid);
   oled.sendBuffer();
 
+#ifdef ESP32
+  WiFi.begin(ssid, pass);
+  uint8_t wifiAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    if (++wifiAttempts >= 60)
+      { showError(g_loc->wifi_failed, g_loc->check_creds); break; }
+  }
+#else
   uint8_t wifiAttempts = 0;
   while (status != WL_CONNECTED)
   {
@@ -235,6 +290,7 @@ void setup()
     if (++wifiAttempts == 3)
       showError(g_loc->wifi_failed, g_loc->check_creds);
   }
+#endif
 
   client.setCACert(netatmo_ca);
 
@@ -244,14 +300,27 @@ void setup()
   if (client.connect(server, 443)) fetchWeatherData();
   else { Serial.println("Connection failed (weather fetch)"); showError(g_loc->api_unreachable, "Weather fetch"); }
 
+#ifdef ESP32
+  // Advance card index for the next wake, then blank the display and sleep.
+  g_card = (g_card + 1) % 3;
+  oled.setPowerSave(1);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  esp_sleep_enable_timer_wakeup((uint64_t)FETCH_MS * 1000ULL);
+  Serial.printf("Sleeping %lu s\n", FETCH_MS / 1000UL);
+  Serial.flush();
+  esp_deep_sleep_start();
+#else
   g_lastFetch      = millis();
   g_lastCardSwitch = millis();
+#endif
 }
 
 void showLocale();
 
 void loop()
 {
+#ifndef ESP32
   unsigned long now = millis();
 
   // Button: cycle locale on press (debounced 300 ms)
@@ -283,6 +352,7 @@ void loop()
   }
 
   delay(100);
+#endif
 }
 
 void showLocale()

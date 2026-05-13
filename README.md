@@ -117,6 +117,46 @@ The display briefly shows the new language name before resuming the weather card
 
 ---
 
+### Wiring — ESP32 DevKit
+
+```mermaid
+flowchart LR
+    subgraph oled["SSD1306 OLED (128×64)"]
+        o_vcc[VCC]
+        o_gnd[GND]
+        o_sda[SDA]
+        o_scl[SCL]
+    end
+
+    subgraph esp["ESP32 DevKit"]
+        e_3v3[3V3]
+        e_gnd[GND]
+        e_sda[GPIO21 — SDA]
+        e_scl[GPIO22 — SCL]
+        e_btn[GPIO0 — BOOT]
+    end
+
+    o_vcc --- e_3v3
+    o_gnd --- e_gnd
+    o_sda --- e_sda
+    o_scl --- e_scl
+```
+
+| OLED pin | ESP32 pin | Notes |
+|---|---|---|
+| VCC | 3V3 | **3.3 V only** — do not connect to 5V on ESP32 |
+| GND | GND | |
+| SDA | GPIO21 | Hardware I2C default |
+| SCL | GPIO22 | Hardware I2C default |
+
+The locale button uses the built-in **BOOT button** (GPIO0) — no external wiring needed.
+
+#### Locale switching on ESP32
+
+Because the ESP32 deep-sleeps between fetches, `loop()` never runs and the button cannot be polled continuously. Instead, **hold the BOOT button at power-on or during any wake cycle** to cycle the locale. The choice is stored in RTC memory and survives all subsequent deep sleeps.
+
+---
+
 ### Software Stack
 
 ```mermaid
@@ -328,9 +368,14 @@ Three full-screen cards then rotate every 5 seconds. Labels and units reflect th
 
 ---
 
-## Supported board
+## Supported boards
 
-**Arduino Uno R4 WiFi** — Renesas RA4M1 (Cortex-M4, 48 MHz), 32 KB RAM, 256 KB Flash. WiFi handled by the on-board ESP32-S3 co-processor via the `WiFiS3` library. Tokens persisted in wear-levelled NVS flash via `Preferences`.
+| Board | MCU | RAM | WiFi | Power model |
+|---|---|---|---|---|
+| Arduino Uno R4 WiFi | Renesas RA4M1 (Cortex-M4, 48 MHz) | 32 KB | ESP32-S3 co-processor via `WiFiS3` | Always-on, polling loop |
+| ESP32 DevKit | Xtensa LX6, 240 MHz | 520 KB | Native, `WiFiClientSecure` | Deep sleep between fetches |
+
+Both use the same `Preferences` API for NVS token storage and the same U8g2 OLED driver.
 
 ---
 
@@ -339,7 +384,7 @@ Three full-screen cards then rotate every 5 seconds. Labels and units reflect th
 ### Prerequisites
 
 1. PlatformIO — either the VS Code extension or the CLI (`pip install platformio`).
-2. An Arduino Uno R4 WiFi.
+2. An **Arduino Uno R4 WiFi** or **ESP32 DevKit** (or compatible).
 3. SSD1306 128×64 OLED display (I2C).
 4. Netatmo Weather Station with a developer account and API credentials from [dev.netatmo.com](https://dev.netatmo.com).
 
@@ -350,8 +395,10 @@ After cloning, your local project should look like this before building:
 ```
 netatmo-weather-api/
 ├── include/
-│   └── uno_r4_wifi/
-│       └── arduino_secrets.h   ← you create this (gitignored, never pushed)
+│   ├── uno_r4_wifi/
+│   │   └── arduino_secrets.h   ← you create this for Uno R4 (gitignored)
+│   └── esp32dev/
+│       └── arduino_secrets.h   ← you create this for ESP32 (gitignored)
 ├── scripts/
 │   └── version.py              ← injects git commit hash at build time
 ├── src/
@@ -361,7 +408,7 @@ netatmo-weather-api/
 └── platformio.ini
 ```
 
-The secrets files are listed in `.gitignore` — they will never be pushed to GitHub, regardless of what you put in them. You create them manually; they are not in the repo.
+The secrets files are listed in `.gitignore` — they will never be pushed to GitHub, regardless of what you put in them. You create them manually using the format shown below; they are not in the repo.
 
 ### Configuration
 
@@ -384,7 +431,7 @@ The city name is pulled automatically from the Netatmo API and shown on the outd
 
 #### Credentials
 
-Create `include/uno_r4_wifi/arduino_secrets.h` with your credentials:
+Create the secrets file for your board — `include/uno_r4_wifi/arduino_secrets.h` or `include/esp32dev/arduino_secrets.h` — with your credentials:
 
 ```cpp
 #define SECRET_SSID       "YourWiFiSSID"
@@ -439,11 +486,13 @@ pip install platformio
 Then from the project root:
 
 ```bash
-# Compile only — produces .pio/build/uno_r4_wifi/firmware.bin
-pio run -e uno_r4_wifi
+# Compile only
+pio run -e uno_r4_wifi   # Arduino Uno R4 WiFi
+pio run -e esp32dev      # ESP32 DevKit
 
 # Compile and flash to the connected board
 pio run -e uno_r4_wifi --target upload
+pio run -e esp32dev    --target upload
 ```
 
 The first build downloads all required toolchains and libraries automatically (~500 MB, one-time). Subsequent builds are incremental and take a few seconds.
@@ -455,7 +504,8 @@ The first build downloads all required toolchains and libraries automatically (~
 The board prints boot diagnostics and runtime status over USB serial at 115200 baud. To read it:
 
 ```bash
-pio device monitor -e uno_r4_wifi
+pio device monitor -e uno_r4_wifi   # Uno R4
+pio device monitor -e esp32dev      # ESP32
 ```
 
 PlatformIO auto-detects the port. Press **Ctrl-C** to exit. You can also use any serial terminal (e.g. `screen`, `minicom`, PuTTY) pointed at the same port and baud rate:
@@ -488,10 +538,56 @@ Open the project folder with the PlatformIO extension installed and use the Uplo
 
 ---
 
+## Power saving (ESP32)
+
+On ESP32 the firmware uses deep sleep instead of a continuous polling loop. `setup()` runs the full fetch-and-display cycle, then puts the chip to sleep for 5 minutes. `loop()` is compiled away and never runs.
+
+### Wake cycle
+
+```mermaid
+flowchart TD
+    A([Deep sleep wake / Cold boot]) --> B[Restore locale from RTC memory]
+    B --> C{Cold boot?}
+    C -->|Yes| D[Show version splash 5 s]
+    C -->|No| E[Connect WiFi]
+    D --> E
+    E --> F[Refresh OAuth token]
+    F --> G[Fetch weather data]
+    G --> H[Draw card on OLED]
+    H --> I[Advance card index in RTC memory]
+    I --> J[Blank OLED — setPowerSave 1]
+    J --> K[WiFi off]
+    K --> L[Deep sleep 5 min]
+    L --> A
+```
+
+### Duty cycle
+
+| Phase | Duration | Typical current |
+|---|---|---|
+| Deep sleep | ~298 s | 10–20 µA |
+| WiFi connect + HTTPS fetch | ~5–8 s | 80–150 mA |
+
+Average over a 5-minute cycle: **under 3 mA** — roughly 30–40× less than an always-on Uno R4. The ESP32 variant is suitable for battery operation.
+
+### RTC memory
+
+Two values survive deep sleep via `RTC_DATA_ATTR`:
+
+| Variable | Purpose |
+|---|---|
+| `g_card` | Which display card to show on the next wake, so cards rotate across sleep cycles |
+| `g_localeIndex` | Active locale, so locale selection persists across reboots |
+
+OAuth tokens are stored in NVS flash (via `Preferences`) and survive both deep sleep and full power loss.
+
+---
+
 ## Revision history
 
 | Version | Commit | Date | Notes |
 |---|---|---|---|
+| v1.2 | — | 2026-05-13 | ESP32 DevKit support. Deep sleep between 5-min fetches (~3 mA average). Card and locale persist across sleeps via RTC memory. OLED blanked during sleep. |
 | v1.11 | [`c47bf68`](../../commit/c47bf68) | 2026-05-10 | Runtime locale switching via push button on D7. Cycles sv-SE → en-US → en-GB → fr-FR. No recompile needed. |
 | v1.1 | [`690098e`](../../commit/690098e) | 2026-05-10 | Locale support (en-US, en-GB, sv-SE, fr-FR) with unit conversions (°F/inHg/in for en-US). City name pulled from Netatmo API and shown on outdoor card. |
 | v1.0 | [`f240fd0`](../../commit/f240fd0) | 2026-05-10 | First versioned release. Dropped Nano 33 IoT support — UNO R4 WiFi only. Added version splash screen showing app version, build date, and git commit hash. |

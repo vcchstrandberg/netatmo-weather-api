@@ -668,7 +668,7 @@ flowchart TD
     F --> G[Fetch weather data]
     G --> H[Draw card on display\nOLED or TFT]
     H --> I[Advance card index in RTC memory]
-    I --> J[Blank display\nOLED: setPowerSave / TFT: backlight off]
+    I --> J[Display stays on — frame buffer retained\nduring sleep, last card remains visible]
     J --> K[WiFi off]
     K --> L[Deep sleep 5 min]
     L --> A
@@ -676,12 +676,12 @@ flowchart TD
 
 ### Duty cycle
 
-| Phase | Duration | Typical current |
-|---|---|---|
-| Deep sleep | ~298 s | 10–20 µA |
-| WiFi connect + HTTPS fetch | ~5–8 s | 80–150 mA |
+| Phase | Duration | Typical current (ESP32 + OLED) | Typical current (ESP32-C6 + TFT) |
+|---|---|---|---|
+| Deep sleep (display on) | ~298 s | ~15–25 mA (OLED) | ~40–80 mA (TFT backlight) |
+| WiFi connect + HTTPS fetch | ~5–8 s | 80–150 mA | 80–150 mA |
 
-Average over a 5-minute cycle: **under 3 mA** — roughly 30–40× less than an always-on Uno R4. The ESP32 variant is suitable for battery operation.
+The display remains on during deep sleep so the last weather card is always visible. The dominant power cost is the display itself; the ESP32 deep-sleep current (~10–20 µA) is negligible in this configuration. For USB-powered use this is the right trade-off. For battery operation, restoring the display-off behaviour (blanking before sleep) would reduce average current to under 3 mA.
 
 ### RTC memory
 

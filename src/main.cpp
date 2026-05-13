@@ -365,12 +365,8 @@ void setup()
 #ifdef DEEP_SLEEP_PLATFORM
   g_card = (g_card + 1) % 3;          // advance for next wake
 
-#  ifdef WAVESHARE_ESP32C6_LCD
-  tft.fillScreen(TFT_BLACK);
-  digitalWrite(TFT_BL, LOW);          // backlight off
-#  else
-  oled.setPowerSave(1);               // OLED off
-#  endif
+  // Display intentionally left on — both SSD1306 and ST7789 retain their
+  // frame buffer during deep sleep, so the last card stays visible.
 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);

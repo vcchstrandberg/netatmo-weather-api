@@ -153,7 +153,7 @@ The locale button uses the built-in **BOOT button** (GPIO0) — no external wiri
 
 #### Locale switching on ESP32
 
-Because the ESP32 deep-sleeps between fetches, `loop()` never runs and the button cannot be polled continuously. Instead, **hold the BOOT button at power-on or during any wake cycle** to cycle the locale. The choice is stored in RTC memory and survives all subsequent deep sleeps.
+Press the **BOOT button (GPIO0)** at any time to cycle the locale. The display briefly shows the new language name before resuming the weather cards.
 
 ---
 
@@ -172,7 +172,7 @@ The display is integrated on the board — no external display wiring is require
 
 #### Locale switching on Waveshare ESP32-C6
 
-Same behaviour as the ESP32 DevKit: the chip deep-sleeps between fetches. **Hold the BOOT button (GPIO9) at power-on or during any wake** to cycle the locale. The display briefly shows the new language name before continuing. The locale is stored in RTC memory.
+Press the **BOOT button (GPIO9)** at any time to cycle the locale. The display briefly shows the new language name before resuming the weather cards.
 
 ---
 
@@ -183,7 +183,7 @@ flowchart TB
     subgraph main[main.cpp — Application Logic]
         direction LR
         setup["setup()"]
-        loop["loop() — Uno R4 only"]
+        loop["loop() — all boards"]
         refresh["refreshAccessToken()"]
         fetch["fetchWeatherData()"]
         display["drawCard()"]
@@ -214,20 +214,20 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A([Power On / Reset]) --> B[Initialise OLED + Serial]
+    A([Power On / Reset]) --> B[Initialise display + Serial\nOLED or TFT depending on board]
     B --> S[Show version splash\napp version · build date · git commit · 5 s]
     S --> C{Tokens stored\nin NVS?}
     C -->|Yes| D[Load access + refresh\ntokens from NVS]
     C -->|No| E[Use hardcoded tokens\nfrom arduino_secrets.h]
-    D --> F[Show Connecting… on OLED]
+    D --> F[Show Connecting…]
     E --> F
     F --> G[Connect to WiFi]
     G --> H{Connected?}
-    H -->|No — retry| I[Wait 10 s]
+    H -->|No — retry| I[Wait 0.5–10 s]
     I --> G
     H -->|Yes| J[Set TLS CA certificate]
     J --> K[Refresh token + fetch initial data]
-    K --> L[Render first card on OLED]
+    K --> L[Render first card]
     L --> M([Enter Main Loop])
 ```
 
@@ -235,15 +235,15 @@ flowchart TD
 
 ### Main Loop
 
-The loop is non-blocking. Three independent inputs are checked on every iteration:
+All three boards run the same non-blocking polling loop. Three independent inputs are checked on every iteration:
 
-- **Locale button** — checked first on every tick; a press cycles the locale and shows the language name for 1.5 s.
+- **Locale button** — a press cycles the locale and shows the language name for 1.5 s. Debounced at 300 ms.
 - **Card rotation** — every 5 s, advance to the next display card and call `drawCard()`.
-- **Data fetch** — every 60 s, refresh the OAuth token and pull fresh weather data; the new values are stored in globals and the current card re-renders immediately.
+- **Data fetch** — every **60 s** (Uno R4) or **5 min** (ESP32 / ESP32-C6), refresh the OAuth token and pull fresh weather data; the current card re-renders immediately.
 
 ```mermaid
 flowchart TD
-    start([Loop iteration]) --> btn{D7 button\npressed?}
+    start([Loop iteration]) --> btn{Button\npressed?}
     btn -->|Yes — debounced 300 ms| locale[Advance locale\nsv-SE→en-US→en-GB→fr-FR\nShow language name 1.5 s\ndrawCard]
     btn -->|No| card
 
@@ -252,7 +252,7 @@ flowchart TD
     card -->|No| fetch
     rotate --> fetch
 
-    fetch{60 s elapsed\nsince last fetch?}
+    fetch{60 s / 5 min elapsed\nsince last fetch?}
     fetch -->|No| sleep[delay 100 ms]
     fetch -->|Yes| conn1[Open HTTPS connection\nto api.netatmo.com]
 
@@ -305,7 +305,7 @@ sequenceDiagram
 
     A->>S: putString("access_token", new_value)
     A->>S: putString("refresh_token", new_value)
-    Note over S: Persisted across reboots and deep sleep
+    Note over S: Persisted across reboots
 
     A->>N: GET /api/getstationsdata
     Note over A,N: Authorization: Bearer access_token
@@ -339,7 +339,7 @@ Both display variants show the same three data cards. Labels and units reflect t
 ```
 ┌──────────────────────────────┐
 │ Netatmo Weather              │
-│ v1.3                         │
+│ v1.4                         │
 │ May 13 2026                  │
 │ 14244ed                      │  ← git commit hash
 └──────────────────────────────┘
@@ -396,18 +396,18 @@ Three full-screen cards rotate every 5 seconds. Each shows a 16×16 Open Iconic 
 
 #### TFT display layout (Waveshare ESP32-C6) — 320×172 landscape
 
-**Boot splash** — shown only on cold boot (not on every deep-sleep wake):
+**Boot splash** — shown on boot:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │ Netatmo Weather                                                │
-│ v1.3                                                           │
+│ v1.4                                                           │
 │ May 13 2026                                                    │
 │ 14244ed                                                        │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-**Locale switch** — shown for 1.5 seconds when BOOT is held at wake:
+**Locale switch** — shown for 1.5 seconds when BOOT is pressed:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -419,7 +419,7 @@ Three full-screen cards rotate every 5 seconds. Each shows a 16×16 Open Iconic 
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Three cards rotate across deep-sleep cycles (one card per wake). Each card has a coloured header bar, a large primary value, and a secondary line.
+Three cards rotate every 5 seconds. Each card has a coloured header bar, a large primary value, and a secondary line.
 
 **Card 0 — Indoor** (warm amber header)
 ```
@@ -467,8 +467,8 @@ Three cards rotate across deep-sleep cycles (one card per wake). Each card has a
 | Board | MCU | RAM | Display | WiFi | Power model |
 |---|---|---|---|---|---|
 | Arduino Uno R4 WiFi | Renesas RA4M1 (Cortex-M4, 48 MHz) | 32 KB | SSD1306 128×64 OLED (external, I2C) | ESP32-S3 co-processor via `WiFiS3` | Always-on, polling loop every 60 s |
-| ESP32 DevKit | Xtensa LX6, 240 MHz | 520 KB | SSD1306 128×64 OLED (external, I2C) | Native, `WiFiClientSecure` | Deep sleep 5 min between fetches |
-| Waveshare ESP32-C6 Touch LCD 1.47 | ESP32-C6 (RISC-V, 160 MHz) | 512 KB | 172×320 IPS TFT, ST7789, integrated | Native WiFi 6, `WiFiClientSecure` | Deep sleep 5 min between fetches |
+| ESP32 DevKit | Xtensa LX6, 240 MHz | 520 KB | SSD1306 128×64 OLED (external, I2C) | Native, `WiFiClientSecure` | Always-on polling loop, fetches every 5 min |
+| Waveshare ESP32-C6 Touch LCD 1.47 | ESP32-C6 (RISC-V, 160 MHz) | 512 KB | 172×320 IPS TFT, ST7789, integrated | Native WiFi 6, `WiFiClientSecure` | Always-on polling loop, fetches every 5 min |
 
 All boards use the `Preferences` API for NVS token storage. The Uno R4 and ESP32 DevKit use U8g2 for the OLED; the Waveshare uses LovyanGFX for the integrated TFT.
 
@@ -651,48 +651,17 @@ Open the project folder with the PlatformIO extension installed and use the Uplo
 
 ---
 
-## Power saving (ESP32 DevKit · Waveshare ESP32-C6)
+## Power characteristics
 
-On both ESP32 platforms the firmware uses deep sleep instead of a continuous polling loop. `setup()` runs the full fetch-and-display cycle, then puts the chip to sleep for 5 minutes. `loop()` is compiled away and never runs.
+All three boards are designed for USB or 5 V wall-adapter power — the device is intended to be always on. The display runs continuously and cards cycle every 5 seconds.
 
-### Wake cycle
-
-```mermaid
-flowchart TD
-    A([Deep sleep wake / Cold boot]) --> B[Restore locale from RTC memory]
-    B --> C{Cold boot?}
-    C -->|Yes| D[Show version splash 5 s]
-    C -->|No| E[Connect WiFi]
-    D --> E
-    E --> F[Refresh OAuth token]
-    F --> G[Fetch weather data]
-    G --> H[Draw card on display\nOLED or TFT]
-    H --> I[Advance card index in RTC memory]
-    I --> J[Display stays on — frame buffer retained\nduring sleep, last card remains visible]
-    J --> K[WiFi off]
-    K --> L[Deep sleep 5 min]
-    L --> A
-```
-
-### Duty cycle
-
-| Phase | Duration | Typical current (ESP32 + OLED) | Typical current (ESP32-C6 + TFT) |
+| Board | Idle current (display on, WiFi idle) | During fetch (WiFi active) | Fetch interval |
 |---|---|---|---|
-| Deep sleep (display on) | ~298 s | ~15–25 mA (OLED) | ~40–80 mA (TFT backlight) |
-| WiFi connect + HTTPS fetch | ~5–8 s | 80–150 mA | 80–150 mA |
+| Arduino Uno R4 WiFi | ~20–30 mA | ~80–150 mA | Every 60 s |
+| ESP32 DevKit + OLED | ~15–25 mA | ~80–150 mA | Every 5 min |
+| Waveshare ESP32-C6 + TFT | ~40–80 mA | ~80–150 mA | Every 5 min |
 
-The display remains on during deep sleep so the last weather card is always visible. The dominant power cost is the display itself; the ESP32 deep-sleep current (~10–20 µA) is negligible in this configuration. For USB-powered use this is the right trade-off. For battery operation, restoring the display-off behaviour (blanking before sleep) would reduce average current to under 3 mA.
-
-### RTC memory
-
-Two values survive deep sleep via `RTC_DATA_ATTR`:
-
-| Variable | Purpose |
-|---|---|
-| `g_card` | Which display card to show on the next wake, so cards rotate across sleep cycles |
-| `g_localeIndex` | Active locale, so locale selection persists across reboots |
-
-OAuth tokens are stored in NVS flash (via `Preferences`) and survive both deep sleep and full power loss.
+The ESP32 platforms fetch every 5 minutes because the Netatmo weather station only uploads new readings every 5 minutes — more frequent fetches would return stale data. OAuth tokens are stored in NVS flash (via `Preferences`) and survive reboots and power loss.
 
 ---
 
@@ -700,7 +669,8 @@ OAuth tokens are stored in NVS flash (via `Preferences`) and survive both deep s
 
 | Version | Commit | Date | Notes |
 |---|---|---|---|
-| v1.3 | [`14244ed`](../../commit/14244ed) | 2026-05-13 | Waveshare ESP32-C6 Touch LCD 1.47 support. Integrated 172×320 IPS display (ST7789) via LovyanGFX. Deep sleep same as ESP32 DevKit. pioarduino platform for ESP32-C6 Arduino support. |
+| v1.4 | [`322bb8e`](../../commit/322bb8e) | 2026-05-13 | Removed deep sleep from all ESP32 platforms. All three boards now run an always-on polling loop. ESP32 platforms fetch every 5 min; Uno R4 fetches every 60 s. Cards rotate every 5 s continuously. |
+| v1.3 | [`14244ed`](../../commit/14244ed) | 2026-05-13 | Waveshare ESP32-C6 Touch LCD 1.47 support. Integrated 172×320 IPS display (ST7789) via LovyanGFX. pioarduino platform for ESP32-C6 Arduino support. |
 | v1.2 | [`2b7d06a`](../../commit/2b7d06a) | 2026-05-13 | ESP32 DevKit support. Deep sleep between 5-min fetches (~3 mA average). Card and locale persist across sleeps via RTC memory. OLED blanked during sleep. |
 | v1.11 | [`c47bf68`](../../commit/c47bf68) | 2026-05-10 | Runtime locale switching via push button on D7. Cycles sv-SE → en-US → en-GB → fr-FR. No recompile needed. |
 | v1.1 | [`690098e`](../../commit/690098e) | 2026-05-10 | Locale support (en-US, en-GB, sv-SE, fr-FR) with unit conversions (°F/inHg/in for en-US). City name pulled from Netatmo API and shown on outdoor card. |
@@ -724,11 +694,10 @@ git checkout -b restore-v1.0 f240fd0
 ## Features
 
 - **Live Netatmo data** — indoor temperature and humidity, outdoor temperature, air pressure, and rain totals (1 h and 24 h) fetched from the Netatmo Cloud API over HTTPS
-- **3-card display** — indoor, outdoor, and rain cards rotate on every board; SSD1306 rotates every 5 s (Uno R4), TFT shows one card per wake cycle (ESP32/C6)
+- **3-card display** — indoor, outdoor, and rain cards rotate every 5 s on all boards
 - **Multi-locale with unit conversion** — Svenska, English US, English UK, Français; automatically converts °C→°F, hPa→inHg, mm→in for en-US
-- **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button at wake on ESP32 DevKit and Waveshare ESP32-C6)
-- **Three-board support** — Arduino Uno R4 WiFi (always-on polling), ESP32 DevKit (deep sleep + SSD1306), Waveshare ESP32-C6 Touch LCD 1.47 (deep sleep + integrated 172×320 IPS TFT)
-- **Deep sleep (ESP32 platforms)** — chip sleeps 5 minutes between fetches; display is blanked during sleep; card rotation and locale selection persist across sleep cycles via RTC memory; average current under 3 mA
+- **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button on ESP32 DevKit and Waveshare ESP32-C6)
+- **Three-board support** — Arduino Uno R4 WiFi (always-on, SSD1306), ESP32 DevKit (always-on, SSD1306), Waveshare ESP32-C6 Touch LCD 1.47 (always-on, integrated 172×320 IPS TFT)
 - **OAuth2 token refresh** — tokens are refreshed every cycle and written to wear-levelled NVS flash, so the device never loses API access across reboots or power cuts
 - **TLS with pinned CA** — all API calls are verified against the DigiCert Global Root G2 certificate
 - **Boot splash** — shows app version, build date, and git commit hash on startup

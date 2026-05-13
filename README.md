@@ -607,8 +607,15 @@ git checkout -b restore-v1.0 f240fd0
 
 ---
 
-## Missing features
+## Features
 
-- [X] Refresh the access token and persist it across reboots.
-- [X] OLED display showing live weather data.
-- [X] Design a case for the display. See `enclosure/enclosure.scad`.
+- **Live Netatmo data** — indoor temperature and humidity, outdoor temperature, air pressure, and rain totals (1 h and 24 h) fetched from the Netatmo Cloud API over HTTPS
+- **3-card OLED display** — indoor, outdoor, and rain cards rotate every 5 seconds on a 128×64 SSD1306
+- **Multi-locale with unit conversion** — Svenska, English US, English UK, Français; automatically converts °C→°F, hPa→inHg, mm→in for en-US
+- **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button at wake on ESP32)
+- **Dual-board support** — Arduino Uno R4 WiFi (always-on polling loop) and ESP32 DevKit (deep sleep, ~3 mA average)
+- **ESP32 deep sleep** — chip sleeps 5 minutes between fetches; OLED is blanked during sleep; card rotation and locale selection persist across sleep cycles via RTC memory
+- **OAuth2 token refresh** — tokens are refreshed every cycle and written to wear-levelled NVS flash, so the device never loses API access across reboots or power cuts
+- **TLS with pinned CA** — all API calls are verified against the DigiCert Global Root G2 certificate
+- **Boot splash** — shows app version, build date, and git commit hash on startup
+- **3D-printable enclosure** — OpenSCAD source in `enclosure/enclosure.scad`

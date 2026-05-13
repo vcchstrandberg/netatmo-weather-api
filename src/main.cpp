@@ -528,7 +528,7 @@ void drawCard(uint8_t card)
       oled.setFont(u8g2_font_logisoso28_tr);
       oled.drawStr(0, 50, (String(toDisplayTemp(g_outdoorTemp), 1) + g_loc->temp_unit).c_str());
       oled.setFont(u8g2_font_ncenB08_tr);
-      oled.drawStr(0, 62, (String(g_loc->pressure) + String(toDisplayPressure(g_airPressure), g_loc->pressure_decimals) + g_loc->pressure_unit).c_str());
+      oled.drawStr(0, 62, (String(g_loc->pressure) + String(toDisplayPressure(g_airPressure), (unsigned int)g_loc->pressure_decimals) + g_loc->pressure_unit).c_str());
       break;
 
     case 2:
@@ -539,8 +539,8 @@ void drawCard(uint8_t card)
       if (g_isRaining)
         oled.drawXBMP(112, 0, 8, 8, rain_drop_bmp); // "raining now" indicator
       oled.setFont(u8g2_font_logisoso16_tr);
-      oled.drawStr(0, 38, ("1h:  " + String(toDisplayRain(g_rain1h),  g_loc->rain_decimals) + g_loc->rain_unit).c_str());
-      oled.drawStr(0, 58, ("24h: " + String(toDisplayRain(g_rain24h), g_loc->rain_decimals) + g_loc->rain_unit).c_str());
+      oled.drawStr(0, 38, ("1h:  " + String(toDisplayRain(g_rain1h),  (unsigned int)g_loc->rain_decimals) + g_loc->rain_unit).c_str());
+      oled.drawStr(0, 58, ("24h: " + String(toDisplayRain(g_rain24h), (unsigned int)g_loc->rain_decimals) + g_loc->rain_unit).c_str());
       break;
   }
 

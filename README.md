@@ -10,9 +10,10 @@ An Arduino-based weather display that pulls live data from a Netatmo Weather Sta
 |---|---|---|---|
 | Arduino Uno R4 WiFi | Renesas RA4M1 (Cortex-M4, 48 MHz) | SSD1306 128×64 OLED (external, I2C) | Always-on, fetches every 60 s |
 | ESP32 DevKit | Xtensa LX6, 240 MHz | SSD1306 128×64 OLED (external, I2C) | Always-on, fetches every 5 min |
+| AI-Thinker ESP32-CAM | Xtensa LX6, 240 MHz | SSD1306 128×64 OLED (external, I2C GPIO14/15) | Always-on, fetches every 5 min |
 | Waveshare ESP32-C6 Touch LCD 1.47 | ESP32-C6 (RISC-V, 160 MHz) | 172×320 IPS TFT, ST7789, integrated | Always-on, fetches every 5 min |
 
-All boards use the `Preferences` API for NVS token storage. The Uno R4 and ESP32 DevKit use U8g2 for the OLED; the Waveshare uses LovyanGFX for the integrated TFT.
+All boards use the `Preferences` API for NVS token storage. The Uno R4, ESP32 DevKit, and ESP32-CAM use U8g2 for the OLED; the Waveshare uses LovyanGFX for the integrated TFT.
 
 ---
 
@@ -22,7 +23,7 @@ All boards use the `Preferences` API for NVS token storage. The Uno R4 and ESP32
 - **3-card display** — indoor, outdoor, and rain cards rotate every 5 s on all boards
 - **Multi-locale with unit conversion** — Svenska, English US, English UK, Français; automatically converts °C→°F, hPa→inHg, mm→in for en-US
 - **Runtime locale switching** — cycle locales at any time without recompiling (button on D7 on Uno R4; BOOT button on ESP32 DevKit and Waveshare ESP32-C6)
-- **Three-board support** — Arduino Uno R4 WiFi (always-on, SSD1306), ESP32 DevKit (always-on, SSD1306), Waveshare ESP32-C6 Touch LCD 1.47 (always-on, integrated 172×320 IPS TFT)
+- **Four-board support** — Arduino Uno R4 WiFi, ESP32 DevKit, AI-Thinker ESP32-CAM (all always-on with SSD1306 OLED), Waveshare ESP32-C6 Touch LCD 1.47 (always-on, integrated 172×320 IPS TFT)
 - **OAuth2 token refresh** — tokens are refreshed every cycle and written to wear-levelled NVS flash, so the device never loses API access across reboots or power cuts
 - **TLS with pinned CA** — all API calls are verified against the DigiCert Global Root G2 certificate
 - **Boot splash** — shows app version, build date, and git commit hash on startup
@@ -49,6 +50,7 @@ All boards use the `Preferences` API for NVS token storage. The Uno R4 and ESP32
    ```bash
    pio run -e uno_r4_wifi            --target upload
    pio run -e esp32dev               --target upload
+   pio run -e esp32cam               --target upload
    pio run -e esp32c6_waveshare_lcd  --target upload
    ```
 

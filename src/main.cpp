@@ -5,9 +5,10 @@
 
 // ── Platform selection ────────────────────────────────────────────────────────
 // WAVESHARE_ESP32C6_LCD  — Waveshare ESP32-C6 Touch LCD 1.47 (integrated TFT)
-// ESP32                  — generic ESP32 DevKit + external SSD1306 (I2C)
+// ESP32CAM               — AI-Thinker ESP32-CAM + external SSD1306 (I2C GPIO14/15)
+// ESP32                  — generic ESP32 DevKit + external SSD1306 (I2C GPIO21/22)
 // (neither)              — Arduino Uno R4 WiFi + external SSD1306 (I2C)
-// All three boards use a continuous polling loop. ESP32 platforms fetch every
+// All boards use a continuous polling loop. ESP32 platforms fetch every
 // 5 minutes; Uno R4 fetches every 60 seconds.
 
 #ifdef WAVESHARE_ESP32C6_LCD
@@ -236,7 +237,11 @@ void setup()
 
 // ── SSD1306 OLED init (ESP32 devkit + Uno R4) ────────────────────────────────
 #else
-  Wire.begin();
+#ifdef ESP32CAM
+  Wire.begin(14, 15);  // SDA=GPIO14, SCL=GPIO15 (camera pins repurposed)
+#else
+  Wire.begin();        // ESP32 DevKit: SDA=GPIO21, SCL=GPIO22 (hardware defaults)
+#endif
   Serial.println("I2C scan:");
   uint8_t found = 0;
   for (uint8_t addr = 1; addr < 127; addr++) {

@@ -2,6 +2,7 @@
 
 | Version | Commit | Date | Notes |
 |---|---|---|---|
+| v1.5 | [`HEAD`](../../commits/main) | 2026-05-14 | AI-Thinker ESP32-CAM support. SSD1306 OLED on GPIO14 (SDA) / GPIO15 (SCL). Same always-on polling loop as ESP32 DevKit. |
 | v1.4 | [`322bb8e`](../../commit/322bb8e) | 2026-05-13 | Removed deep sleep from all ESP32 platforms. All three boards now run an always-on polling loop. ESP32 platforms fetch every 5 min; Uno R4 fetches every 60 s. Cards rotate every 5 s continuously. |
 | v1.3 | [`14244ed`](../../commit/14244ed) | 2026-05-13 | Waveshare ESP32-C6 Touch LCD 1.47 support. Integrated 172×320 IPS display (ST7789) via LovyanGFX. pioarduino platform for ESP32-C6 Arduino support. |
 | v1.2 | [`2b7d06a`](../../commit/2b7d06a) | 2026-05-13 | ESP32 DevKit support. Deep sleep between 5-min fetches (~3 mA average). Card and locale persist across sleeps via RTC memory. OLED blanked during sleep. |

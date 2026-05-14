@@ -8,4 +8,5 @@ include/uno_r4_wifi/arduino_secrets.h
 include/nano33iot/arduino_secrets.h
 include/esp32dev/arduino_secrets.h
 include/esp32c6_waveshare_lcd/arduino_secrets.h
+include/esp32cam/arduino_secrets.h
 

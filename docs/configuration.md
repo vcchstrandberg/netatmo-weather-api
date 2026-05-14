@@ -14,6 +14,8 @@ netatmo-weather-api/
 │   │   └── arduino_secrets.h           ← you create this for Uno R4 (gitignored)
 │   ├── esp32dev/
 │   │   └── arduino_secrets.h           ← you create this for ESP32 DevKit (gitignored)
+│   ├── esp32cam/
+│   │   └── arduino_secrets.h           ← you create this for ESP32-CAM (gitignored)
 │   └── esp32c6_waveshare_lcd/
 │       ├── LGFX_config.h               ← LovyanGFX pin / panel configuration
 │       └── arduino_secrets.h           ← you create this for Waveshare (gitignored)
@@ -57,6 +59,7 @@ Create the secrets file for your board in the matching include directory:
 |---|---|
 | Arduino Uno R4 WiFi | `include/uno_r4_wifi/arduino_secrets.h` |
 | ESP32 DevKit | `include/esp32dev/arduino_secrets.h` |
+| AI-Thinker ESP32-CAM | `include/esp32cam/arduino_secrets.h` |
 | Waveshare ESP32-C6 | `include/esp32c6_waveshare_lcd/arduino_secrets.h` |
 
 All three files use the same format:
@@ -117,11 +120,13 @@ Then from the project root:
 # Compile only
 pio run -e uno_r4_wifi            # Arduino Uno R4 WiFi
 pio run -e esp32dev               # ESP32 DevKit
+pio run -e esp32cam               # AI-Thinker ESP32-CAM
 pio run -e esp32c6_waveshare_lcd  # Waveshare ESP32-C6 Touch LCD 1.47
 
 # Compile and flash to the connected board
 pio run -e uno_r4_wifi            --target upload
 pio run -e esp32dev               --target upload
+pio run -e esp32cam               --target upload
 pio run -e esp32c6_waveshare_lcd  --target upload
 ```
 

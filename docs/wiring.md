@@ -98,6 +98,50 @@ Press the **BOOT button (GPIO0)** at any time to cycle the locale. The display b
 
 ---
 
+## AI-Thinker ESP32-CAM
+
+```mermaid
+flowchart LR
+    subgraph oled["SSD1306 OLED (128×64)"]
+        o_vcc[VCC]
+        o_gnd[GND]
+        o_sda[SDA]
+        o_scl[SCL]
+    end
+
+    subgraph cam["AI-Thinker ESP32-CAM"]
+        c_3v3[3V3]
+        c_gnd[GND]
+        c_sda[GPIO14 — SDA]
+        c_scl[GPIO15 — SCL]
+        c_btn[GPIO0 — BOOT]
+    end
+
+    o_vcc --- c_3v3
+    o_gnd --- c_gnd
+    o_sda --- c_sda
+    o_scl --- c_scl
+```
+
+| OLED pin | ESP32-CAM pin | Notes |
+|---|---|---|
+| VCC | 3V3 | **3.3 V only** |
+| GND | GND | |
+| SDA | GPIO14 | Camera HREF pin — repurposed for I2C |
+| SCL | GPIO15 | Camera PCLK pin — repurposed for I2C |
+
+The locale button uses the built-in **BOOT button** (GPIO0) — no external wiring needed.
+
+> **Note:** GPIO14 and GPIO15 are camera interface pins. They are safe to use for I2C when the camera module is not in use, which is always the case for this sketch.
+
+> **Flashing:** The ESP32-CAM has no built-in auto-reset circuit. To flash, connect IO0 → GND and press RST (or power-cycle) before starting the upload. Disconnect IO0 from GND after flashing.
+
+### Locale switching on ESP32-CAM
+
+Press the **BOOT button (GPIO0)** at any time to cycle the locale. The display briefly shows the new language name before resuming the weather cards.
+
+---
+
 ## Waveshare ESP32-C6 Touch LCD 1.47
 
 The display is integrated on the board — no external display wiring is required. The SPI connection between the ESP32-C6 and the ST7789 panel is made on-board and configured in `include/esp32c6_waveshare_lcd/LGFX_config.h`.
